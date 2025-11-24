@@ -228,3 +228,8 @@ tmp/
 
 # Analysis reports
 analysis_report_*.txt
+
+# Large data files
+*.jsonl
+orig_*.txt
+yolov9c.pt
