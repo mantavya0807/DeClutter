@@ -41,10 +41,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
-    print("✅ Gemini AI available for description generation and field completion")
+    print("[OK] Gemini AI available for description generation and field completion")
 except ImportError:
     GEMINI_AVAILABLE = False
-    print("⚠️ Gemini AI not available")
+    print("[WARNING] Gemini AI not available")
 
 app = Flask(__name__)
 CORS(app)
@@ -56,7 +56,7 @@ class EbayAutomatorImproved:
         self.ebay_logged_in = False
         self.gemini_model = None
         self.setup_gemini()
-        print("🛒 eBay Automator IMPROVED initialized")
+        print("[INIT] eBay Automator IMPROVED initialized")
     
     def setup_gemini(self):
         """Initialize Gemini AI for description generation and field completion"""
@@ -72,10 +72,10 @@ class EbayAutomatorImproved:
                 # Test the model
                 test = self.gemini_model.generate_content("Test")
                 if test and test.text:
-                    print(f"✅ Gemini AI configured successfully: {key[:8]}...")
+                    print(f"[OK] Gemini AI configured successfully: {key[:8]}...")
                     return
             except Exception as e:
-                print(f"⚠️ Gemini key failed {key[:8]}...: {e}")
+                print(f"[WARNING] Gemini key failed {key[:8]}...: {e}")
                 return
 
         print("⚠️ No working Gemini API key found")
@@ -614,7 +614,7 @@ Provide only the field value, nothing else:"""
     def ensure_ebay_access(self) -> bool:
         """Ensure eBay access (login if needed)"""
         if not self.driver:
-            if not self.start_browser():
+            if not self.start_browser(headless=False):
                 return False
         
         return self.check_ebay_login()
@@ -1182,7 +1182,7 @@ Write a description that would make someone want to buy this item:"""
         }), 500
 
 if __name__ == '__main__':
-    print("🛒 eBay Listing Automation API v2.1 - IMPROVED + AI-GUIDED")
+    print("[API] eBay Listing Automation API v2.1 - IMPROVED + AI-GUIDED")
     print("=" * 65)
     print("✨ NEW FEATURES:")
     print("  - AI-powered field completion with Gemini")

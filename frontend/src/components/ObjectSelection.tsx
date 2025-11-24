@@ -2,9 +2,9 @@
 
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState, useEffect } from 'react';
-import { 
-  ArrowLeft, 
-  X, 
+import {
+  ArrowLeft,
+  X,
   Upload,
   Camera
 } from 'lucide-react';
@@ -22,6 +22,8 @@ interface DetectedObject {
   };
   croppedImageUrl: string;
   estimatedValue: number;
+  pricingData?: any; // Store full pricing data from backend
+  jobId?: string; // Job ID for polling updates
   googleData?: {
     rating?: {
       rating: number;
@@ -55,13 +57,13 @@ interface ObjectSelectionProps {
 }
 
 // Pipeline API configuration
-const PIPELINE_API_BASE = (process.env.NEXT_PUBLIC_PIPELINE_API_URL as string) || 'http://localhost:3005';
+const PIPELINE_API_BASE = (process.env.NEXT_PUBLIC_PIPELINE_API_URL as string) || 'http://localhost:5000';
 
 // Function to send image to Pipeline API for real object detection
 const sendImageToPipelineAPI = async (file: File): Promise<DetectedObject[]> => {
   try {
     console.log('Sending image to Pipeline API...');
-    
+
     const formData = new FormData();
     formData.append('image', file);
     formData.append('sync', 'false'); // Use async processing
@@ -82,7 +84,7 @@ const sendImageToPipelineAPI = async (file: File): Promise<DetectedObject[]> => 
     if (data.job_id) {
       // Poll for results
       const results = await pollJobStatus(data.job_id);
-      return mapPipelineResultsToDetectedObjects(results);
+      return mapPipelineResultsToDetectedObjects(results, data.job_id);
     } else if (data.status === 'completed' && data.results) {
       return mapPipelineResultsToDetectedObjects(data.results);
     } else {
@@ -97,7 +99,7 @@ const sendImageToPipelineAPI = async (file: File): Promise<DetectedObject[]> => 
 // Poll job status until completion
 const pollJobStatus = async (jobId: string): Promise<any> => {
   const statusUrl = `${PIPELINE_API_BASE}/api/pipeline/status/${jobId}`;
-  
+
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const maxAttempts = 180; // 180 second timeout (3 minutes)
@@ -136,7 +138,7 @@ const pollJobStatus = async (jobId: string): Promise<any> => {
 };
 
 // Map pipeline results to DetectedObject format
-const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => {
+const mapPipelineResultsToDetectedObjects = (results: any, jobId?: string): DetectedObject[] => {
   if (!results) {
     console.warn('No pipeline results provided');
     return [];
@@ -144,7 +146,7 @@ const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => 
 
   // Handle different result formats
   let objectsArray;
-  
+
   if (results.processed_objects && Array.isArray(results.processed_objects)) {
     objectsArray = results.processed_objects;
   } else if (results.detected_objects && Array.isArray(results.detected_objects)) {
@@ -160,10 +162,10 @@ const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => 
     // Get product name from recognition result if available
     const recognitionResult = obj.recognition_result || {};
     const productName = recognitionResult.product_name || obj.object_name || obj.name || 'Unknown Object';
-    
+
     // Get estimated value from multiple sources
     let estimatedValue = 0;
-    
+
     // First try pricing data from marketplace scraping
     if (obj.estimated_value && obj.estimated_value > 0) {
       estimatedValue = obj.estimated_value;
@@ -175,17 +177,17 @@ const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => 
       } else if (pricing.ebay_prices && pricing.ebay_prices.length > 0) {
         estimatedValue = pricing.ebay_prices.reduce((a: number, b: number) => a + b, 0) / pricing.ebay_prices.length;
       }
-    } 
-    
+    }
+
     // Fallback to Google's pricing data from recognition
     if (!estimatedValue && recognitionResult.pricing) {
       const googlePricing = recognitionResult.pricing;
-      
+
       // Use typical price range if available
       if (googlePricing.typical_price_range) {
         const range = googlePricing.typical_price_range;
         estimatedValue = (range.min + range.max) / 2; // Use average of range
-      } 
+      }
       // Fallback to current prices average
       else if (googlePricing.current_prices && googlePricing.current_prices.length > 0) {
         const prices = googlePricing.current_prices;
@@ -197,7 +199,7 @@ const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => 
     if (!estimatedValue) {
       const objectName = productName.toLowerCase();
       const confidence = obj.confidence || 0.5;
-      
+
       // Basic price estimates based on common items
       if (objectName.includes('phone') || objectName.includes('iphone') || objectName.includes('samsung')) {
         estimatedValue = Math.round(150 + (confidence * 200)); // $150-$350
@@ -233,6 +235,8 @@ const mapPipelineResultsToDetectedObjects = (results: any): DetectedObject[] => 
       },
       croppedImageUrl: obj.storage_url || obj.croppedImageUrl || obj.cropped_path || '/clutter.png',
       estimatedValue: Math.round(estimatedValue),
+      pricingData: obj.pricing_data || null, // Preserve scraper API data
+      jobId: jobId, // Pass job ID for continued polling
       // Add rich data from Google recognition
       googleData: {
         rating: recognitionResult.rating || null,
@@ -255,12 +259,12 @@ const ObjectSelection = ({ photoId, originalPhotoUrl, onObjectsSelected, onBack 
 
   const startCamera = async () => {
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
       });
       setStream(mediaStream);
       setShowCamera(true);
-      
+
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
@@ -286,7 +290,7 @@ const ObjectSelection = ({ photoId, originalPhotoUrl, onObjectsSelected, onBack 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
-    
+
     if (!context) return;
 
     canvas.width = video.videoWidth;
@@ -310,12 +314,12 @@ const ObjectSelection = ({ photoId, originalPhotoUrl, onObjectsSelected, onBack 
     try {
       const previewUrl = URL.createObjectURL(file);
       setUploadedImage(previewUrl);
-      
+
       console.log('Uploading image:', file.name);
-      
+
       setIsProcessing(true);
       const detectedObjects = await sendImageToPipelineAPI(file);
-      
+
       if (detectedObjects && detectedObjects.length > 0) {
         console.log('Real objects detected:', detectedObjects);
         onObjectsSelected(detectedObjects);
@@ -341,7 +345,7 @@ const ObjectSelection = ({ photoId, originalPhotoUrl, onObjectsSelected, onBack 
         ];
         onObjectsSelected(mockObjects);
       }
-      
+
     } catch (error) {
       console.error('Error uploading image:', error);
       const mockObjects = [
@@ -414,128 +418,130 @@ const ObjectSelection = ({ photoId, originalPhotoUrl, onObjectsSelected, onBack 
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-white via-gray-50 to-gray-100">
-      <div className="relative pt-4 pb-6 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={onBack}
-            className="p-3 bg-white/80 backdrop-blur-md border border-gray-200/50 rounded-xl text-gray-700 hover:bg-white/90 shadow-lg transition-all"
-          >
-            <ArrowLeft className="w-6 h-6" />
-          </motion.button>
-          
-          <div className="text-center">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-              Upload Photo
-            </h1>
-            <p className="text-gray-600 text-sm sm:text-base mt-1">
-              Take or upload a photo of your space
-            </p>
-          </div>
-          
-          <div className="w-12" />
+    <div className="w-full max-w-4xl mx-auto p-4 sm:p-6">
+      <div className="flex items-center justify-between mb-8">
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={onBack}
+          className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+        >
+          <ArrowLeft className="w-6 h-6" />
+        </motion.button>
+
+        <div className="text-center">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+            Upload Photo
+          </h1>
+          <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base mt-1">
+            Take or upload a photo of your space
+          </p>
         </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white/70 backdrop-blur-md border border-gray-200/50 rounded-3xl shadow-2xl p-8 sm:p-12"
-        >
-          <div className="text-center mb-8">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-3">
-              Choose Your Method
-            </h2>
-            <p className="text-gray-600">
-              Upload an existing photo or take a new one with your camera
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              className="relative"
-            >
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                disabled={isUploading || isProcessing}
-              />
-              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-2xl p-8 text-center hover:from-blue-100 hover:to-indigo-100 transition-all">
-                <Upload className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  Upload Photo
-                </h3>
-                <p className="text-gray-600 text-sm">
-                  Choose an existing photo from your device
-                </p>
-              </div>
-            </motion.div>
-
-            <motion.div
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={startCamera}
-              className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-dashed border-green-300 rounded-2xl p-8 text-center cursor-pointer hover:from-green-100 hover:to-emerald-100 transition-all"
-            >
-              <Camera className="w-12 h-12 text-green-500 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                Take Photo
-              </h3>
-              <p className="text-gray-600 text-sm">
-                Use your camera to capture a new photo
-              </p>
-            </motion.div>
-          </div>
-
-          {(isUploading || isProcessing) && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-8 text-center"
-            >
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full"
-                />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                {isUploading ? 'Uploading your photo...' : 'Identifying products...'}
-              </h3>
-              <p className="text-gray-600">
-                {isUploading 
-                  ? 'Please wait while we upload your image' 
-                  : 'AI is detecting objects and identifying products with ratings and prices (1-3 minutes)'}
-              </p>
-            </motion.div>
-          )}
-
-          {uploadedImage && !isUploading && !isProcessing && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="mt-8"
-            >
-              <div className="relative">
-                <img
-                  src={uploadedImage}
-                  alt="Uploaded photo"
-                  className="w-full max-w-sm mx-auto rounded-2xl shadow-2xl"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent rounded-2xl"></div>
-              </div>
-              <p className="text-black/70 text-sm mt-4 text-center">
-                Processing your image to detect items...
-              </p>
-            </motion.div>
-          )}
-        </motion.div>
+        <div className="w-10" />
       </div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white dark:bg-[#112233] rounded-3xl border border-gray-100 dark:border-[#1e3a52] shadow-sm p-8 sm:p-12"
+      >
+        <div className="text-center mb-8">
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-3">
+            Choose Your Method
+          </h2>
+          <p className="text-gray-500 dark:text-gray-400">
+            Upload an existing photo or take a new one with your camera
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <motion.div
+            whileHover={{ scale: 1.02 }}
+            className="relative group"
+          >
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              disabled={isUploading || isProcessing}
+            />
+            <div className="h-full bg-gray-50 dark:bg-[#0a1b2a] border-2 border-dashed border-gray-200 dark:border-[#1e3a52] group-hover:border-[#5BAAA7] dark:group-hover:border-[#5BAAA7] rounded-2xl p-8 text-center transition-all">
+              <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+                <Upload className="w-8 h-8 text-blue-500 dark:text-blue-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                Upload Photo
+              </h3>
+              <p className="text-gray-500 dark:text-gray-400 text-sm">
+                Choose an existing photo from your device
+              </p>
+            </div>
+          </motion.div>
+
+          <motion.div
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={startCamera}
+            className="h-full bg-gray-50 dark:bg-[#0a1b2a] border-2 border-dashed border-gray-200 dark:border-[#1e3a52] hover:border-[#5BAAA7] dark:hover:border-[#5BAAA7] rounded-2xl p-8 text-center cursor-pointer group transition-all"
+          >
+            <div className="w-16 h-16 bg-green-50 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+              <Camera className="w-8 h-8 text-green-500 dark:text-green-400" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              Take Photo
+            </h3>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">
+              Use your camera to capture a new photo
+            </p>
+          </motion.div>
+        </div>
+
+        {(isUploading || isProcessing) && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-8 text-center"
+          >
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-[#5BAAA7]/10 rounded-full mb-4">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="w-8 h-8 border-2 border-[#5BAAA7] border-t-transparent rounded-full"
+              />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              {isUploading ? 'Uploading your photo...' : 'Identifying products...'}
+            </h3>
+            <p className="text-gray-500 dark:text-gray-400">
+              {isUploading
+                ? 'Please wait while we upload your image'
+                : 'AI is detecting objects and identifying products with ratings and prices (1-3 minutes)'}
+            </p>
+          </motion.div>
+        )}
+
+        {uploadedImage && !isUploading && !isProcessing && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mt-8"
+          >
+            <div className="relative">
+              <img
+                src={uploadedImage}
+                alt="Uploaded photo"
+                className="w-full max-w-sm mx-auto rounded-2xl shadow-lg"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent rounded-2xl"></div>
+            </div>
+            <p className="text-gray-500 dark:text-gray-400 text-sm mt-4 text-center">
+              Processing your image to detect items...
+            </p>
+          </motion.div>
+        )}
+      </motion.div>
     </div>
   );
 };

@@ -6,7 +6,7 @@
 -- ==============================================
 
 -- Delete existing buckets if they exist
-DELETE FROM storage.buckets WHERE id IN ('used_upload', 'cropped');
+-- DELETE FROM storage.buckets WHERE id IN ('used_upload', 'cropped'); -- Commented out to prevent FK violation if buckets have files
 
 -- Create used_upload bucket for original photos
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -16,7 +16,7 @@ VALUES (
   true, 
   10485760, -- 10MB limit for photos
   ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Create cropped bucket for detected object images
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -26,22 +26,26 @@ VALUES (
   true, 
   5242880, -- 5MB limit for cropped images
   ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- 2. CREATE STORAGE POLICIES
 -- ==============================================
 
 -- Policies for used_upload bucket
+DROP POLICY IF EXISTS "Allow public uploads to used_upload" ON storage.objects;
 CREATE POLICY "Allow public uploads to used_upload" ON storage.objects
 FOR INSERT WITH CHECK (bucket_id = 'used_upload');
 
+DROP POLICY IF EXISTS "Allow public reads from used_upload" ON storage.objects;
 CREATE POLICY "Allow public reads from used_upload" ON storage.objects
 FOR SELECT USING (bucket_id = 'used_upload');
 
 -- Policies for cropped bucket
+DROP POLICY IF EXISTS "Allow public uploads to cropped" ON storage.objects;
 CREATE POLICY "Allow public uploads to cropped" ON storage.objects
 FOR INSERT WITH CHECK (bucket_id = 'cropped');
 
+DROP POLICY IF EXISTS "Allow public reads from cropped" ON storage.objects;
 CREATE POLICY "Allow public reads from cropped" ON storage.objects
 FOR SELECT USING (bucket_id = 'cropped');
 
@@ -60,6 +64,10 @@ CREATE TABLE IF NOT EXISTS public.photos (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Ensure columns exist (in case table existed from previous schema)
+ALTER TABLE public.photos ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+ALTER TABLE public.photos ADD COLUMN IF NOT EXISTS processed BOOLEAN DEFAULT false;
 
 -- Cropped objects table for detected resellable items
 CREATE TABLE IF NOT EXISTS public.cropped (
@@ -92,6 +100,44 @@ CREATE TABLE IF NOT EXISTS public.listings (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Conversations table
+CREATE TABLE IF NOT EXISTS public.conversations (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    platform_thread_id TEXT UNIQUE NOT NULL, -- The unique ID from Facebook URL or composite key
+    buyer_name TEXT NOT NULL,
+    item_title TEXT,
+    item_id TEXT, -- Optional, if we can link to our listings
+    last_message_at TIMESTAMPTZ DEFAULT NOW(),
+    is_unread BOOLEAN DEFAULT false,
+    status TEXT DEFAULT 'active', -- active, archived, blocked
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Ensure columns exist (in case table existed from previous schema)
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS platform_thread_id TEXT;
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS buyer_name TEXT;
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS item_title TEXT;
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS is_unread BOOLEAN DEFAULT false;
+ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+
+-- Messages table
+CREATE TABLE IF NOT EXISTS public.messages (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL, -- 'buyer' or 'me'
+    content TEXT,
+    platform_timestamp TIMESTAMPTZ, -- When it was sent on FB
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Ensure columns exist (in case table existed from previous schema)
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS sender TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS content TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS platform_timestamp TIMESTAMPTZ;
+
 -- 4. CREATE INDEXES
 -- ==============================================
 
@@ -112,30 +158,52 @@ CREATE INDEX IF NOT EXISTS idx_listings_user_id ON public.listings(user_id);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON public.listings(status);
 CREATE INDEX IF NOT EXISTS idx_listings_created_at ON public.listings(created_at DESC);
 
+-- Indexes for messaging
+CREATE INDEX IF NOT EXISTS idx_conversations_thread_id ON public.conversations(platform_thread_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id);
+
 -- 5. ENABLE ROW LEVEL SECURITY
 -- ==============================================
 
 ALTER TABLE public.photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cropped ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.listings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
 -- 6. CREATE RLS POLICIES
 -- ==============================================
 
 -- Photos policies
+DROP POLICY IF EXISTS "Allow public photo uploads" ON public.photos;
 CREATE POLICY "Allow public photo uploads" ON public.photos FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public photo reads" ON public.photos;
 CREATE POLICY "Allow public photo reads" ON public.photos FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public photo updates" ON public.photos;
 CREATE POLICY "Allow public photo updates" ON public.photos FOR UPDATE USING (true);
 
 -- Cropped policies
+DROP POLICY IF EXISTS "Allow public cropped uploads" ON public.cropped;
 CREATE POLICY "Allow public cropped uploads" ON public.cropped FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public cropped reads" ON public.cropped;
 CREATE POLICY "Allow public cropped reads" ON public.cropped FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public cropped updates" ON public.cropped;
 CREATE POLICY "Allow public cropped updates" ON public.cropped FOR UPDATE USING (true);
 
 -- Listings policies
+DROP POLICY IF EXISTS "Allow public listing uploads" ON public.listings;
 CREATE POLICY "Allow public listing uploads" ON public.listings FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public listing reads" ON public.listings;
 CREATE POLICY "Allow public listing reads" ON public.listings FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public listing updates" ON public.listings;
 CREATE POLICY "Allow public listing updates" ON public.listings FOR UPDATE USING (true);
+
+-- Conversations policies
+DROP POLICY IF EXISTS "Allow public conversation access" ON public.conversations;
+CREATE POLICY "Allow public conversation access" ON public.conversations FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Allow public message access" ON public.messages;
+CREATE POLICY "Allow public message access" ON public.messages FOR ALL USING (true);
 
 -- 7. CREATE UPDATE TRIGGERS
 -- ==============================================

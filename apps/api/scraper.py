@@ -64,7 +64,7 @@ class MarketplaceScraper:
             try:
                 genai.configure(api_key=key.strip())
                 # Test with a simple model
-                model = genai.GenerativeModel('gemini-pro')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 test_response = model.generate_content("Test")
                 
                 if test_response and test_response.text:
@@ -299,7 +299,7 @@ Respond with ONLY the decimal number (e.g., 0.85):
     def ensure_facebook_access(self) -> bool:
         """Ensure Facebook access (login if needed)"""
         if not self.driver:
-            if not self.start_browser():
+            if not self.start_browser(headless=False):
                 return False
         
         # Check current login status
@@ -479,7 +479,7 @@ Candidates:
             print(f"🔨 Scraping eBay sold listings: '{query}'")
             
             if not self.driver:
-                if not self.start_browser():
+                if not self.start_browser(headless=False):
                     return results
             
             # eBay sold listings URL

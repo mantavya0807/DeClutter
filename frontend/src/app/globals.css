@@ -1,29 +1,58 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
-/* Correct root selector and enforce light palette */
+/* CSS Variables approach for reliable dark mode */
 :root {
-  --foreground-rgb: 17, 24, 39; /* gray-900 */
-  --background-start-rgb: 248, 244, 255; /* light lavender */
-  --background-end-rgb: 232, 244, 253;   /* light blue */
+  /* Light mode colors */
+  --color-bg-primary: 255, 255, 255;
+  --color-bg-secondary: 249, 250, 251;
+  --color-bg-tertiary: 243, 244, 246;
+  --color-text-primary: 17, 24, 39;
+  --color-text-secondary: 107, 114, 128;
+  --color-border: 229, 231, 235;
 }
 
-/* Always light theme (ignore prefers-color-scheme) */
-/* Intentionally remove dark overrides */
+html.dark {
+  /* Dark mode colors */
+  --color-bg-primary: 17, 34, 51;
+  /* #112233 */
+  --color-bg-secondary: 10, 27, 42;
+  /* #0a1b2a */
+  --color-bg-tertiary: 30, 58, 82;
+  /* #1e3a52 */
+  --color-text-primary: 243, 244, 246;
+  --color-text-secondary: 156, 163, 175;
+  --color-border: 30, 58, 82;
+}
 
+/* Apply CSS variables */
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    ) rgb(var(--background-start-rgb));
+  background-color: rgb(var(--color-bg-secondary));
+  color: rgb(var(--color-text-primary));
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-  font-variation-settings: normal;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Force immediate visual feedback */
+html.light {
+  background: white !important;
+}
+
+html.light body {
+  background: rgb(249, 250, 251) !important;
+  color: rgb(17, 24, 39) !important;
+}
+
+html.dark {
+  background: rgb(10, 27, 42) !important;
+}
+
+html.dark body {
+  background: rgb(10, 27, 42) !important;
+  color: rgb(243, 244, 246) !important;
 }
 
 /* Custom scrollbar */
@@ -32,35 +61,32 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--color-bg-tertiary), 0.5);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.3);
+  background: rgba(var(--color-border), 0.8);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.5);
+  background: rgba(var(--color-border), 1);
 }
 
-/* Smooth scrolling */
 html {
   scroll-behavior: smooth;
 }
 
-/* Custom selection */
 ::selection {
-  background: rgba(139, 92, 246, 0.18);
-  color: rgb(55, 65, 81);
+  background: rgba(99, 102, 241, 0.2);
+  color: rgb(var(--color-text-primary));
 }
 
-/* Focus styles */
 *:focus {
   outline: none;
 }
 
 *:focus-visible {
-  outline: 2px solid rgba(139, 92, 246, 0.5);
+  outline: 2px solid rgb(99, 102, 241);
   outline-offset: 2px;
 }

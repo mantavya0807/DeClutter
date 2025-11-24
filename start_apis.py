@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Start All API Servers for Decluttered.AI Pipeline
-This script starts all required API servers in separate processes
+Start Unified API Server for Decluttered.AI
+This script starts the unified Flask application with all services as blueprints
 """
 
 import os
@@ -9,46 +9,19 @@ import sys
 import time
 import subprocess
 import signal
-import threading
 from pathlib import Path
 
-# API server configurations
-API_SERVERS = [
-    {
-        'name': 'Recognition API',
-        'script': 'main.py',
-        'port': 3001,
-        'description': 'Google reverse image search and product identification'
-    },
-    {
-        'name': 'Scraper API', 
-        'script': 'scraper.py',
-        'port': 3002,
-        'description': 'Facebook Marketplace and eBay price scraping'
-    },
-    {
-        'name': 'Facebook API',
-        'script': 'listing.py', 
-        'port': 3003,
-        'description': 'Facebook Marketplace listing automation'
-    },
-    {
-        'name': 'eBay API',
-        'script': 'ebay_improved.py',
-        'port': 3004, 
-        'description': 'eBay listing automation with AI'
-    },
-    {
-        'name': 'Pipeline API',
-        'script': 'pipeline_api.py',
-        'port': 3005,
-        'description': 'Complete pipeline processing via web API'
-    }
-]
+# Unified API server configuration
+UNIFIED_SERVER = {
+    'name': 'Decluttered.AI Unified API',
+    'script': 'unified_app.py',
+    'port': 5000,
+    'description': 'All services consolidated: Recognition, Scraper, Listing, eBay, Pipeline'
+}
 
-class APIServerManager:
+class UnifiedServerManager:
     def __init__(self):
-        self.processes = []
+        self.process = None
         self.api_dir = Path(__file__).parent / 'apps' / 'api'
         
         if not self.api_dir.exists():
@@ -58,135 +31,127 @@ class APIServerManager:
             print("❌ Could not find API directory")
             sys.exit(1)
             
-        print(f"[FOLDER] Using API directory: {self.api_dir}")
+        print(f"📁 Using API directory: {self.api_dir}")
     
-    def start_server(self, server_config):
-        """Start a single API server"""
-        script_path = self.api_dir / server_config['script']
+    def start_server(self):
+        """Start the unified API server"""
+        script_path = self.api_dir / UNIFIED_SERVER['script']
         
         if not script_path.exists():
             print(f"❌ Script not found: {script_path}")
             return None
         
         try:
-            print(f"[ROCKET] Starting {server_config['name']} on port {server_config['port']}...")
+            print(f"🚀 Starting {UNIFIED_SERVER['name']} on port {UNIFIED_SERVER['port']}...")
             
             # Start the process
             process = subprocess.Popen(
                 [sys.executable, str(script_path)],
                 cwd=str(self.api_dir),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                encoding='utf-8',  # Force UTF-8 encoding for output
+                errors='replace'   # Replace characters that can't be decoded
             )
             
-            # Give it a moment to start
-            time.sleep(2)
+            # Monitor startup output
+            print("📋 Server startup log:")
+            print("-" * 50)
+            startup_lines = []
+            for _ in range(50):  # Read first 50 lines
+                try:
+                    line = process.stdout.readline()
+                    if line:
+                        print(f"   {line.rstrip()}")
+                        startup_lines.append(line)
+                        if "Debugger PIN" in line or "Running on" in line:
+                            break
+                except:
+                    break
+            
+            # Give it a moment to fully start
+            time.sleep(1)
             
             # Check if it's still running
             if process.poll() is None:
-                print(f"[OK] {server_config['name']} started successfully (PID: {process.pid})")
+                print("-" * 50)
+                print(f"✅ {UNIFIED_SERVER['name']} started successfully (PID: {process.pid})")
                 return process
             else:
-                stdout, stderr = process.communicate()
-                print(f"[ERROR] {server_config['name']} failed to start:")
-                if stderr:
-                    print(f"   Error: {stderr[:200]}...")
+                print(f"❌ {UNIFIED_SERVER['name']} failed to start")
                 return None
                 
         except Exception as e:
-            print(f"❌ Failed to start {server_config['name']}: {e}")
+            print(f"❌ Failed to start {UNIFIED_SERVER['name']}: {e}")
             return None
     
-    def start_all_servers(self):
-        """Start all API servers"""
-        print("[FIRE] DECLUTTERED.AI - API SERVER MANAGER")
+    def start(self):
+        """Start unified server"""
+        print("🔥 DECLUTTERED.AI - UNIFIED API SERVER")
         print("=" * 50)
-        print("Starting all required API servers...")
+        print("Starting unified API server with all services...")
         print()
         
-        for server_config in API_SERVERS:
-            process = self.start_server(server_config)
-            if process:
-                self.processes.append((server_config, process))
-            time.sleep(1)  # Stagger startup
+        self.process = self.start_server()
         
-        print()
-        if self.processes:
-            print(f"[OK] Started {len(self.processes)}/{len(API_SERVERS)} API servers successfully")
+        if self.process:
             print()
-            print("[LIST] Running Services:")
-            for server_config, process in self.processes:
-                print(f"   • {server_config['name']}: http://localhost:{server_config['port']}")
-                print(f"     {server_config['description']}")
+            print("✅ Unified API server is running!")
+            print()
+            print("📋 Available Services:")
+            print(f"   • Recognition API: http://localhost:{UNIFIED_SERVER['port']}/api/recognition")
+            print(f"   • Scraper API: http://localhost:{UNIFIED_SERVER['port']}/api/scraper")
+            print(f"   • Listing API: http://localhost:{UNIFIED_SERVER['port']}/api/listing")
+            print(f"   • eBay API: http://localhost:{UNIFIED_SERVER['port']}/api/ebay")
+            print(f"   • Pipeline API: http://localhost:{UNIFIED_SERVER['port']}/api/pipeline")
             
             print()
-            print("[GLOBE] Frontend Integration:")
-            print("   • Next.js frontend should connect to these APIs automatically")
-            print("   • Pipeline page: http://localhost:3000/pipeline")
-            print("   • Upload an image to start the complete workflow")
-            print()
-            print("[CHART] Health Check URLs:")
-            for server_config, _ in self.processes:
-                print(f"   • {server_config['name']}: http://localhost:{server_config['port']}/health")
+            print("🌐 Frontend Integration:")
+            print(f"   • Main health check: http://localhost:{UNIFIED_SERVER['port']}/health")
+            print("   • All services accessible through single port!")
             
             print()
-            print("[STOP] To stop all servers, press Ctrl+C")
+            print("🔍 Service Health Checks:")
+            print(f"   • Recognition: http://localhost:{UNIFIED_SERVER['port']}/api/recognition/health")
+            print(f"   • Scraper: http://localhost:{UNIFIED_SERVER['port']}/api/scraper/health")
+            print(f"   • Listing: http://localhost:{UNIFIED_SERVER['port']}/api/listing/health")
+            print(f"   • eBay: http://localhost:{UNIFIED_SERVER['port']}/api/ebay/health")
+            print(f"   • Pipeline: http://localhost:{UNIFIED_SERVER['port']}/api/pipeline/health")
             
+            print()
+            print("🛑 To stop the server, press Ctrl+C")
+            print()
+            
+            return True
         else:
-            print("[ERROR] No servers started successfully")
+            print("❌ Failed to start unified server")
             return False
-        
-        return True
     
-    def stop_all_servers(self):
-        """Stop all running servers"""
-        print("\n[STOP] Stopping all API servers...")
-        
-        for server_config, process in self.processes:
+    def stop(self):
+        """Stop the unified server"""
+        if self.process:
+            print("\n🛑 Stopping unified API server...")
+            
             try:
-                print(f"⏹️ Stopping {server_config['name']}...")
-                process.terminate()
+                self.process.terminate()
                 
                 # Wait for graceful shutdown
                 try:
-                    process.wait(timeout=5)
-                    print(f"✅ {server_config['name']} stopped gracefully")
+                    self.process.wait(timeout=5)
+                    print("✅ Server stopped gracefully")
                 except subprocess.TimeoutExpired:
                     # Force kill if needed
-                    print(f"⚡ Force killing {server_config['name']}...")
-                    process.kill()
-                    process.wait()
+                    print("⚡ Force killing server...")
+                    self.process.kill()
+                    self.process.wait()
                     
             except Exception as e:
-                print(f"⚠️ Error stopping {server_config['name']}: {e}")
+                print(f"⚠️ Error stopping server: {e}")
         
-        print("✅ All servers stopped")
-    
-    def monitor_servers(self):
-        """Monitor server health"""
-        while True:
-            try:
-                time.sleep(10)  # Check every 10 seconds
-                
-                # Check if any processes have died
-                dead_servers = []
-                for server_config, process in self.processes:
-                    if process.poll() is not None:
-                        dead_servers.append((server_config, process))
-                
-                if dead_servers:
-                    print(f"\n⚠️ Detected {len(dead_servers)} dead server(s):")
-                    for server_config, process in dead_servers:
-                        print(f"   ❌ {server_config['name']} (port {server_config['port']}) has stopped")
-                        self.processes.remove((server_config, process))
-                
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                print(f"⚠️ Monitoring error: {e}")
+        print("✅ Server stopped")
     
     def run(self):
         """Main run method"""
@@ -195,18 +160,14 @@ class APIServerManager:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
             
-            # Start all servers
-            if not self.start_all_servers():
+            # Start server
+            if not self.start():
                 return 1
             
-            # Start monitoring in background
-            monitor_thread = threading.Thread(target=self.monitor_servers, daemon=True)
-            monitor_thread.start()
-            
-            # Keep main thread alive
+            # Keep main thread alive and stream output
             try:
-                while True:
-                    time.sleep(1)
+                for line in self.process.stdout:
+                    print(line.rstrip())
             except KeyboardInterrupt:
                 pass
             
@@ -216,12 +177,12 @@ class APIServerManager:
             print(f"❌ Server manager error: {e}")
             return 1
         finally:
-            self.stop_all_servers()
+            self.stop()
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         print(f"\n📡 Received signal {signum}, shutting down...")
-        self.stop_all_servers()
+        self.stop()
         sys.exit(0)
 
 def check_python_version():
@@ -268,8 +229,8 @@ def main():
     if not check_dependencies():
         return 1
     
-    # Create and run server manager
-    manager = APIServerManager()
+    # Create and run unified server manager
+    manager = UnifiedServerManager()
     return manager.run()
 
 if __name__ == '__main__':

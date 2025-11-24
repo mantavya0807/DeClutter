@@ -1,12 +1,12 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  X, 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  DollarSign, 
-  Eye, 
-  MessageCircle, 
+import {
+  X,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  DollarSign,
+  Eye,
+  MessageCircle,
   Calendar,
   BarChart3,
   PieChart,
@@ -16,17 +16,17 @@ import {
   Clock,
   Zap
 } from 'lucide-react';
-import { 
-  LineChart, 
-  Line, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer, 
-  BarChart, 
-  Bar, 
-  PieChart as RechartsPieChart, 
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  PieChart as RechartsPieChart,
   Cell,
   AreaChart,
   Area
@@ -41,15 +41,8 @@ interface ListingDetailModalProps {
 const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProps) => {
   if (!listing) return null;
 
-  // Mock detailed analytics data for charts
-  const priceHistoryData = [
-    { day: 'Day 1', price: listing.originalPrice, views: 12, messages: 0 },
-    { day: 'Day 2', price: listing.originalPrice, views: 28, messages: 1 },
-    { day: 'Day 3', price: listing.price, views: 45, messages: 3 },
-    { day: 'Day 4', price: listing.price, views: 52, messages: 5 },
-    { day: 'Day 5', price: listing.price, views: 67, messages: 8 },
-    { day: 'Today', price: listing.price, views: listing.analytics?.totalViews || 70, messages: listing.offers?.length || 2 }
-  ];
+  // Use real analytics data if available, otherwise empty
+  const priceHistoryData = listing.analytics?.priceHistory || [];
 
   const platformPerformanceData = listing.platforms?.map((platform: any) => ({
     platform: platform.name,
@@ -66,21 +59,14 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
     discount: Math.round(((listing.price - offer.amount) / listing.price) * 100)
   })) || [];
 
-  const viewsOverTimeData = [
-    { time: '9 AM', views: 5, messages: 0 },
-    { time: '12 PM', views: 15, messages: 1 },
-    { time: '3 PM', views: 32, messages: 2 },
-    { time: '6 PM', views: 48, messages: 5 },
-    { time: '9 PM', views: 63, messages: 6 },
-    { time: 'Now', views: listing.analytics?.totalViews || 70, messages: listing.offers?.length || 8 }
-  ];
+  const viewsOverTimeData = listing.analytics?.viewsOverTime || [];
 
   const COLORS = ['#5BAAA7', '#1A6A6A', '#F6EFD9', '#CDE7E2', '#8FBC8F'];
 
-  const highestOffer = listing.offers?.reduce((max: any, offer: any) => 
+  const highestOffer = listing.offers?.reduce((max: any, offer: any) =>
     offer.amount > max.amount ? offer : max, listing.offers[0]) || null;
 
-  const lowestOffer = listing.offers?.reduce((min: any, offer: any) => 
+  const lowestOffer = listing.offers?.reduce((min: any, offer: any) =>
     offer.amount < min.amount ? offer : min, listing.offers[0]) || null;
 
   const avgOffer = listing.offers?.reduce((sum: number, offer: any) => sum + offer.amount, 0) / (listing.offers?.length || 1) || 0;
@@ -140,7 +126,7 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
             {/* Content */}
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                
+
                 {/* Left Column - Key Stats */}
                 <div className="space-y-6">
                   {/* Offer Stats */}
@@ -196,10 +182,10 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
                           </div>
                         </div>
                       )) || (
-                        <div className="text-center text-blue-600 py-4">
-                          No active conversations
-                        </div>
-                      )}
+                          <div className="text-center text-blue-600 py-4">
+                            No active conversations
+                          </div>
+                        )}
                     </div>
                   </div>
 
@@ -238,46 +224,52 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
 
                 {/* Middle Column - Charts */}
                 <div className="lg:col-span-2 space-y-6">
-                  
+
                   {/* Price & Views Timeline */}
                   <div className="bg-white rounded-2xl p-6 border border-[#F6EFD9]/40 shadow-sm">
                     <h3 className="font-bold text-[#0a1b2a] mb-4 flex items-center gap-2">
                       <BarChart3 className="w-5 h-5 text-[#5BAAA7]" />
                       Price & Engagement Timeline
                     </h3>
-                    <div className="h-64">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={priceHistoryData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
-                          <XAxis dataKey="day" stroke="#6b7b8c" fontSize={12} />
-                          <YAxis stroke="#6b7b8c" fontSize={12} />
-                          <Tooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'white', 
-                              border: '1px solid #F6EFD9',
-                              borderRadius: '12px',
-                              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                            }}
-                          />
-                          <Area 
-                            type="monotone" 
-                            dataKey="views" 
-                            stroke="#5BAAA7" 
-                            fill="#5BAAA7" 
-                            fillOpacity={0.3}
-                            name="Views"
-                          />
-                          <Area 
-                            type="monotone" 
-                            dataKey="messages" 
-                            stroke="#1A6A6A" 
-                            fill="#1A6A6A" 
-                            fillOpacity={0.3}
-                            name="Messages"
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
+                    {priceHistoryData.length > 0 ? (
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={priceHistoryData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
+                            <XAxis dataKey="day" stroke="#6b7b8c" fontSize={12} />
+                            <YAxis stroke="#6b7b8c" fontSize={12} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: 'white',
+                                border: '1px solid #F6EFD9',
+                                borderRadius: '12px',
+                                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                              }}
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="views"
+                              stroke="#5BAAA7"
+                              fill="#5BAAA7"
+                              fillOpacity={0.3}
+                              name="Views"
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="messages"
+                              stroke="#1A6A6A"
+                              fill="#1A6A6A"
+                              fillOpacity={0.3}
+                              name="Messages"
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="h-64 flex items-center justify-center text-gray-400 italic">
+                        No price history data available yet
+                      </div>
+                    )}
                   </div>
 
                   {/* Platform Performance */}
@@ -292,9 +284,9 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
                           <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
                           <XAxis dataKey="platform" stroke="#6b7b8c" fontSize={12} />
                           <YAxis stroke="#6b7b8c" fontSize={12} />
-                          <Tooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'white', 
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: 'white',
                               border: '1px solid #F6EFD9',
                               borderRadius: '12px',
                               boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
@@ -320,22 +312,22 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
                             <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
                             <XAxis dataKey="offer" stroke="#6b7b8c" fontSize={12} />
                             <YAxis stroke="#6b7b8c" fontSize={12} />
-                            <Tooltip 
-                              contentStyle={{ 
-                                backgroundColor: 'white', 
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: 'white',
                                 border: '1px solid #F6EFD9',
                                 borderRadius: '12px',
                                 boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
                               }}
                               formatter={(value: any, name: string) => [
-                                name === 'amount' ? `$${value}` : `${value}%`, 
+                                name === 'amount' ? `$${value}` : `${value}%`,
                                 name === 'amount' ? 'Offer Amount' : 'Discount %'
                               ]}
                             />
-                            <Line 
-                              type="monotone" 
-                              dataKey="amount" 
-                              stroke="#5BAAA7" 
+                            <Line
+                              type="monotone"
+                              dataKey="amount"
+                              stroke="#5BAAA7"
                               strokeWidth={3}
                               dot={{ fill: '#5BAAA7', strokeWidth: 2, r: 6 }}
                               name="Offer Amount"
@@ -352,31 +344,37 @@ const ListingDetailModal = ({ listing, isOpen, onClose }: ListingDetailModalProp
                       <Clock className="w-5 h-5 text-[#5BAAA7]" />
                       Daily Activity Pattern
                     </h3>
-                    <div className="h-64">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={viewsOverTimeData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
-                          <XAxis dataKey="time" stroke="#6b7b8c" fontSize={12} />
-                          <YAxis stroke="#6b7b8c" fontSize={12} />
-                          <Tooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'white', 
-                              border: '1px solid #F6EFD9',
-                              borderRadius: '12px',
-                              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                            }}
-                          />
-                          <Area 
-                            type="monotone" 
-                            dataKey="views" 
-                            stroke="#5BAAA7" 
-                            fill="#5BAAA7" 
-                            fillOpacity={0.4}
-                            name="Cumulative Views"
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
+                    {viewsOverTimeData.length > 0 ? (
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={viewsOverTimeData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#F6EFD9" />
+                            <XAxis dataKey="time" stroke="#6b7b8c" fontSize={12} />
+                            <YAxis stroke="#6b7b8c" fontSize={12} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: 'white',
+                                border: '1px solid #F6EFD9',
+                                borderRadius: '12px',
+                                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                              }}
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="views"
+                              stroke="#5BAAA7"
+                              fill="#5BAAA7"
+                              fillOpacity={0.4}
+                              name="Cumulative Views"
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="h-64 flex items-center justify-center text-gray-400 italic">
+                        No activity data available yet
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

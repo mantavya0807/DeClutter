@@ -14,6 +14,8 @@ import statistics
 import tempfile
 import base64
 import threading
+import atexit
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional
 from difflib import SequenceMatcher
@@ -28,7 +30,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -61,10 +63,33 @@ class MarketplaceLister:
         self.ebay_token = None
         self.gemini_model = None
         self.gemini_client = None  # Ensure attribute always exists
+        self.monitor = None  # Facebook message monitor instance
         self.setup_gemini()
         self.setup_ebay()
+        atexit.register(self.close)
         print("[ROCKET] Marketplace Lister initialized")
     
+    def __del__(self):
+        self.close()
+
+    def log_error(self, message):
+        """Log error to file"""
+        try:
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'error_log.txt')
+            with open(log_path, 'a') as f:
+                f.write(f"[{datetime.now()}] {message}\n")
+        except:
+            pass
+
+    def kill_stray_processes(self):
+        """Kill stray chromedriver processes to release locks"""
+        print("🧹 Cleaning up stray webdrivers (not Chrome tabs)...")
+        try:
+            if os.name == 'nt':
+                subprocess.run(["taskkill", "/f", "/im", "chromedriver.exe"], 
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"⚠️ Cleanup warning: {e}")
 
     def setup_gemini(self):
         """Initialize Gemini AI for description generation"""
@@ -77,7 +102,7 @@ class MarketplaceLister:
         if key and key.strip() and key != 'your_api_key_here':
             try:
                 genai.configure(api_key=key.strip())
-                self.gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+                self.gemini_model = genai.GenerativeModel("gemini-2.0-flash")
                 # Test model
                 try:
                     _ = self.gemini_model.generate_content("Test")
@@ -119,7 +144,7 @@ class MarketplaceLister:
     def start_browser(self, headless=False):
         """Start Chrome browser with anti-detection settings"""
         try:
-            print("[GLOBE] Starting Chrome browser for Facebook...")
+            print(f"[GLOBE] Starting Chrome browser for Facebook... (Headless: {headless})")
             if not os.path.exists(self.profile_path):
                 os.makedirs(self.profile_path)
                 print(f"[FOLDER] Created profile directory: {self.profile_path}")
@@ -147,7 +172,11 @@ class MarketplaceLister:
                 options.add_argument('--start-maximized')
 
             # Install and start Chrome
-            service = ChromeService(ChromeDriverManager().install())
+            print("[DEBUG] Installing Chrome Driver...")
+            driver_path = ChromeDriverManager().install()
+            print(f"[DEBUG] Chrome Driver installed at: {driver_path}")
+            
+            service = ChromeService(driver_path)
             self.driver = webdriver.Chrome(service=service, options=options)
 
             # Hide automation indicators
@@ -160,7 +189,25 @@ class MarketplaceLister:
 
         except Exception as e:
             print(f"[ERROR] Failed to start browser: {e}")
-            return False
+            import traceback
+            traceback.print_exc()
+            self.log_error(f"Browser start failed: {e}")
+            
+            print("🔄 Attempting to clean up and retry...")
+            self.kill_stray_processes()
+            time.sleep(2)
+            
+            try:
+                # Retry
+                print("[DEBUG] Retrying Chrome Driver installation...")
+                service = ChromeService(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=options)
+                print("[OK] Chrome browser started successfully (after retry)")
+                return True
+            except Exception as e2:
+                print(f"[ERROR] Retry failed: {e2}")
+                self.log_error(f"Browser retry failed: {e2}")
+                return False
     
     def check_facebook_login(self) -> bool:
         """Check if logged into Facebook"""
@@ -168,7 +215,14 @@ class MarketplaceLister:
             print("🔍 Checking Facebook login status...")
             
             self.driver.get("https://www.facebook.com/marketplace/create/item")
-            time.sleep(3)
+            
+            # Wait for URL change or page load instead of sleep
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    lambda d: "marketplace" in d.current_url.lower() or "login" in d.current_url.lower()
+                )
+            except:
+                pass
             
             current_url = self.driver.current_url.lower()
             page_title = self.driver.title.lower()
@@ -231,9 +285,12 @@ class MarketplaceLister:
             print(f"[ERROR] Facebook login process failed: {e}")
             return False
     
-    def handle_facebook_confirmation_dialogs(self) -> bool:
+    def handle_facebook_confirmation_dialogs(self, exclude: List[str] = None) -> bool:
         """Handle various Facebook confirmation dialogs that might appear"""
         try:
+            if exclude is None:
+                exclude = []
+            
             print("🔍 Checking for Facebook confirmation dialogs...")
             
             # Common Facebook confirmation dialogs and their buttons
@@ -243,8 +300,11 @@ class MarketplaceLister:
                     'selectors': [
                         "//div[@aria-label='Leave Page']",
                         "//span[text()='Leave Page']/ancestor::div[@role='button']",
-                        "//div[@role='button' and .//span[text()='Leave Page']]"
-                    ]
+                        "//div[@role='button' and .//span[text()='Leave Page']]",
+                        "//button[text()='Leave Page']",
+                        "//button[.//span[text()='Leave Page']]"
+                    ],
+                    'warning': True
                 },
                 {
                     'name': 'Continue',
@@ -273,12 +333,21 @@ class MarketplaceLister:
             ]
             
             for dialog in dialog_patterns:
+                if dialog['name'] in exclude:
+                    continue
+
                 for selector in dialog['selectors']:
                     try:
                         elements = self.driver.find_elements(By.XPATH, selector)
                         for element in elements:
                             if element.is_displayed() and element.is_enabled():
                                 print(f"[OK] Found '{dialog['name']}' dialog button")
+                                
+                                if dialog.get('warning'):
+                                    print(f"⚠️ WARNING: Clicking '{dialog['name']}' might discard unsaved changes if the listing isn't finished.")
+                                    # Wait a bit to ensure it's not a transient state
+                                    time.sleep(2)
+                                
                                 try:
                                     element.click()
                                     print(f"[OK] Successfully clicked '{dialog['name']}' button")
@@ -306,7 +375,7 @@ class MarketplaceLister:
     def ensure_facebook_access(self) -> bool:
         """Ensure Facebook access (login if needed)"""
         if not self.driver:
-            if not self.start_browser():
+            if not self.start_browser(headless=False):
                 return False
         
         if self.check_facebook_login():
@@ -359,7 +428,13 @@ Guidelines:
                 description = ' '.join(sentences[:5]).strip()
                 # Remove common AI phrases
                 description = re.sub(r'(As an AI language model,|I am an AI|I can|I will|This item is perfect for you if|Don\'t miss out on)', '', description, flags=re.I)
-                return description
+                
+                # Remove any bracketed placeholders [Insert ...] or <Insert ...>
+                description = re.sub(r'\[.*?\]', '', description)
+                description = re.sub(r'\{.*?\}', '', description)
+                description = re.sub(r'<.*?>', '', description)
+                
+                return description.strip()
 
         except Exception as e:
             print(f"[WARNING] Description generation failed: {e}")
@@ -402,603 +477,426 @@ Guidelines:
             print(f"[WARNING] Price calculation failed: {e}")
             return 50.0
     
-    def _handle_nested_category_selection(self, listing_data: Dict, depth: int = 0, max_depth: int = 3):
-        """Recursively handle nested category selection until no more dropdowns appear"""
+    def _handle_nested_category_selection(self, listing_data: Dict, depth: int = 0, max_depth: int = 5):
+        """Recursively handle nested category selection using Gemini"""
         try:
             if depth >= max_depth:
                 print(f"[WARNING] Maximum category depth ({max_depth}) reached")
                 return
             
-            print(f"🔄 Checking for category level {depth + 1}...")
-            time.sleep(2)  # Wait for any new dropdown to appear
+            print(f"🔄 Category Selection Level {depth + 1}...")
+            time.sleep(2)  # Wait for animations
             
-            # First, check if there's actually a new category dropdown that appeared
-            category_dropdowns = []
+            # 1. Find all potential options in the currently visible dropdown/listbox
+            # We look for elements that look like menu items
+            potential_options = []
+            
+            # Strategy A: Look for elements with role="option" or in a listbox
             try:
-                # Look for new category dropdowns that might have appeared
-                new_dropdowns = self.driver.find_elements(By.XPATH, "//label[@role='combobox' and .//span[contains(text(), 'Category') or contains(text(), 'Subcategory') or contains(text(), 'Type')]]")
-                for dropdown in new_dropdowns:
-                    if dropdown.is_displayed():
-                        category_dropdowns.append(dropdown)
-                        print(f"Found potential category dropdown: {dropdown.text[:50]}...")
-            except Exception as e:
-                print(f"Error finding category dropdowns: {e}")
+                options = self.driver.find_elements(By.XPATH, "//div[@role='option']//span | //li[@role='option']//span | //div[@role='listbox']//span")
+                for opt in options:
+                    if opt.is_displayed() and len(opt.text.strip()) > 2:
+                        potential_options.append((opt, opt.text.strip()))
+            except:
+                pass
             
-            # If we found a new dropdown, click it first
-            if category_dropdowns and depth < 2:  # Only try clicking new dropdowns for first couple levels
+            # Strategy B: If A failed, look for any span in a dialog or popover that isn't a button label
+            if not potential_options:
                 try:
-                    dropdown = category_dropdowns[0]
-                    print(f"Clicking new category dropdown at level {depth + 1}")
-                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", dropdown)
-                    time.sleep(0.5)
-                    dropdown.click()
-                    time.sleep(2)
-                    print(f"[OK] Opened new category dropdown at level {depth + 1}")
-                except Exception as e:
-                    print(f"[WARNING] Failed to click new dropdown: {e}")
-            
-            # Get current category options that might have appeared at this level
-            category_options = []
-            
-            # Look for clickable category elements
-            all_spans = self.driver.find_elements(By.XPATH, "//span[string-length(text()) > 2 and string-length(text()) < 50]")
-            
-            # ALSO look specifically in dropdown/menu areas
-            menu_spans = []
-            try:
-                # Look for spans in dropdown menus, listboxes, or popup areas
-                dropdown_areas = self.driver.find_elements(By.XPATH, "//div[@role='listbox']//span | //div[contains(@class, 'menu')]//span | //div[contains(@style, 'position: absolute')]//span")
-                menu_spans.extend(dropdown_areas)
-                
-                # Look for spans that appear after category selection (likely in popover/dropdown areas)
-                category_related_spans = self.driver.find_elements(By.XPATH, "//span[contains(text(), 'accessories') or contains(text(), 'phones') or contains(text(), 'audio') or contains(text(), 'video') or contains(text(), 'computer') or contains(text(), 'laptop') or contains(text(), 'tablet') or contains(text(), 'camera') or contains(text(), 'gaming') or contains(text(), 'headphone') or contains(text(), 'speaker') or contains(text(), 'cable') or contains(text(), 'charger') or contains(text(), 'case') or contains(text(), 'cover') or contains(text(), 'battery')]")
-                menu_spans.extend(category_related_spans)
-                
-                print(f"Found {len(menu_spans)} spans in dropdown/menu areas")
-            except Exception as e:
-                print(f"Error finding menu spans: {e}")
-            
-            # Combine all spans but prioritize menu spans
-            all_candidate_spans = menu_spans + all_spans
-            
-            # Filter for potential category options - much more strict filtering
-            excluded_texts = [
-                'Photos', 'Videos', 'Add photos', 'Add video', 'Save Draft', 'Publish',
-                'Category', 'Condition', 'Description', 'Price', 'Location', 'Title',
-                'notification', 'unread', 'message', 'comment', 'like', 'share',
-                'Marketplace', 'Public', 'or drag and drop', 'minute max', 'Learn more', 
-                'Try It', 'Required', 'Home', 'Profile', 'Menu', 'Search', 'Messages',
-                'Notifications', 'Settings', 'Help', 'Logout', 'Create', 'Post',
-                'Upload', 'Browse', 'Select', 'Choose', 'Edit', 'Delete', 'Save',
-                'Cancel', 'Back', 'Next', 'Continue', 'Skip', 'Done', 'Finish',
-                # NEW: Add the problematic UI elements we're seeing
-                'More details', 'Hide from friends', 'Commerce Policies', 'Seller details',
-                'Privacy', 'Terms', 'About', 'Contact', 'FAQ', 'Support', 'Community',
-                'Guidelines', 'Report', 'Block', 'Follow', 'Unfollow', 'Share'
-            ]
-            
-            # Look specifically for category-like elements, not just any spans
-            known_category_patterns = [
-                'accessories', 'phones', 'mobile', 'audio', 'video', 'computer', 'laptop',
-                'tablet', 'camera', 'gaming', 'console', 'headphone', 'speaker', 'cable',
-                'charger', 'case', 'cover', 'screen', 'battery', 'parts', 'repair'
-            ]
-            
-            for span in all_candidate_spans:
-                try:
-                    if span.is_displayed():
+                    # Broader search for containers including common FB classes or just generic divs that might be the menu
+                    container_xpath = "//div[@role='dialog'] | //div[contains(@class, 'popover')] | //div[contains(@class, 'menu')] | //div[contains(@class, 'scrollable')] | //div[contains(@style, 'position: absolute')]"
+                    spans = self.driver.find_elements(By.XPATH, f"{container_xpath}//span")
+                    
+                    excluded_texts = ['Back', 'Next', 'Cancel', 'Done', 'Search', 'Category', 'Condition', 'Title', 'Price', 'Location', 'Description', 'Photos', 'Videos']
+                    
+                    for span in spans:
                         text = span.text.strip()
-                        if (len(text) > 3 and len(text) < 40 and  # Tighter length requirements
-                            not text.isdigit() and
-                            not any(excl.lower() in text.lower() for excl in excluded_texts) and
-                            text not in [opt[1] for opt in category_options]):  # Avoid duplicates
+                        if (span.is_displayed() and 
+                            len(text) > 2 and 
+                            len(text) < 50 and 
+                            text not in excluded_texts and
+                            not any(ex in text for ex in excluded_texts)):
                             
-                            # Only consider if it contains category-like keywords or looks like a product category
-                            is_category_like = (
-                                any(pattern in text.lower() for pattern in known_category_patterns) or
-                                (' and ' in text and len(text.split()) <= 4) or  # "Mobile phones and accessories"
-                                text.lower().endswith(('s', 'accessories', 'equipment', 'devices', 'products'))
-                            )
-                            
-                            # Additional check: avoid common UI text patterns
-                            is_ui_element = (
-                                text.lower().startswith(('welcome', 'hello', 'hi ', 'your ', 'my ')) or
-                                text in ['Home', 'Feed', 'Friends', 'Watch', 'Groups', 'Gaming'] or
-                                'ago' in text.lower() or
-                                any(char in text for char in ['(', ')', '#', '@', '$']) or
-                                text.isupper()  # ALL CAPS usually UI elements
-                            )
-                            
-                            if is_category_like and not is_ui_element:
-                                category_options.append((span, text))
+                            # Check if clickable
+                            try:
+                                parent = span.find_element(By.XPATH, "./..")
+                                if parent.tag_name == "div" or parent.tag_name == "li":
+                                    potential_options.append((span, text))
+                            except:
+                                pass
                 except:
-                    continue
+                    pass
+
+            # Strategy C: Look for known top-level categories to find the container (Fallback)
+            if not potential_options:
+                known_categories = [
+                    "Antiques and collectibles", "Arts and crafts", "Auto parts", "Baby supplies",
+                    "Books, movies and music", "Cell phones", "Clothing", "Electronics",
+                    "Furniture", "Garage sale", "Health and beauty", "Home and kitchen",
+                    "Jewelry", "Musical instruments", "Pet supplies", "Sports", "Tools", "Toys", "Video games"
+                ]
+                
+                print("Strategy C: Searching for known category markers...")
+                for cat in known_categories:
+                    try:
+                        # Find elements containing this text
+                        markers = self.driver.find_elements(By.XPATH, f"//span[contains(text(), '{cat}')]")
+                        for marker in markers:
+                            if marker.is_displayed():
+                                print(f"Found marker: {cat}")
+                                # Traverse up to find the list container
+                                current = marker
+                                found_list = False
+                                # Go up max 12 levels to find a container with multiple children
+                                for _ in range(12):
+                                    try:
+                                        current = current.find_element(By.XPATH, "./..")
+                                        # Check for siblings (divs or lis)
+                                        children = current.find_elements(By.XPATH, "./div | ./li | ./span")
+                                        # If we find a container with > 3 children, it's likely the list (or a parent of the list items)
+                                        if len(children) > 3:
+                                            # Verify if children contain text
+                                            text_children = [c for c in children if c.text.strip()]
+                                            if len(text_children) > 3:
+                                                found_list = True
+                                                break
+                                    except:
+                                        break
+                                
+                                if found_list:
+                                    print("Found potential list container via marker")
+                                    # Search for all spans and divs in this container
+                                    container_elements = current.find_elements(By.XPATH, ".//span | .//div")
+                                    for el in container_elements:
+                                        text = el.text.strip()
+                                        # Clean up text (remove newlines)
+                                        text = text.replace('\n', ' ').strip()
+                                        
+                                        # Filter out likely non-option text
+                                        if (len(text) > 2 and 
+                                            text not in [p[1] for p in potential_options] and
+                                            text not in ['Delivery available', 'Shipping available'] and
+                                            "See all" not in text and
+                                            len(text) < 60): 
+                                            potential_options.append((el, text))
+                                
+                        if potential_options:
+                            break # Found the menu
+                    except Exception as e:
+                        print(f"Strategy C error for {cat}: {e}")
+                        pass
+
+            # Remove duplicates preserving order
+            unique_options = []
+            seen_texts = set()
+            for span, text in potential_options:
+                if text not in seen_texts:
+                    unique_options.append((span, text))
+                    seen_texts.add(text)
             
-            # Remove obvious non-category options and limit to reasonable number
-            potential_categories = []
-            for span, text in category_options[:20]:  # Limit to first 20 to avoid too many options
-                # Additional filtering for category-like text
-                if (not text.startswith(('$', '#', '@')) and
-                    len(text.split()) <= 6 and  # Categories usually aren't long phrases
-                    not re.match(r'^\d+\s*(hour|day|week|month|year)s?\s*ago', text.lower())):
-                    potential_categories.append((span, text))
+            potential_options = unique_options
             
-            if not potential_categories:
-                print(f"[OK] No more category levels found at depth {depth + 1}")
+            if not potential_options:
+                print(f"[OK] No category options found at level {depth + 1}. Assuming selection complete.")
                 return
-            
-            print(f"Found {len(potential_categories)} potential category options at level {depth + 1}: {[text for _, text in potential_categories[:8]]}")
-            
-            # DEBUG: Let's see what elements we're actually finding
-            if depth < 2:  # Only debug first couple levels
-                print(f"🔍 DEBUG Level {depth + 1} - All found elements:")
-                for i, (span, text) in enumerate(potential_categories[:10]):
-                    try:
-                        parent_class = span.find_element(By.XPATH, "./..").get_attribute('class') or 'no-class'
-                        element_tag = span.tag_name
-                        is_clickable = span.is_enabled()
-                        print(f"  {i+1}. '{text}' | Tag: {element_tag} | Clickable: {is_clickable} | Parent class: {parent_class[:50]}...")
-                    except:
-                        print(f"  {i+1}. '{text}' | Could not get element details")
-            
-            # Use Gemini to pick the best option if available
-            selected_category = None
-            if self.gemini_model and len(potential_categories) > 0:
+
+            print(f"Found {len(potential_options)} options: {[t for _, t in potential_options[:10]]}...")
+
+            # 2. Ask Gemini which one to pick
+            if self.gemini_model:
+                option_texts = [t for _, t in potential_options]
+                context = f"Product: '{listing_data.get('title', '')}'"
+                if listing_data.get('description'):
+                    context += f" Description: '{listing_data.get('description', '')[:100]}...'"
+                
+                prompt = f"""
+                {context}
+                We are selecting a category on Facebook Marketplace.
+                Current available options:
+                {json.dumps(option_texts)}
+                
+                Select the ONE best option that fits the product.
+                Return ONLY the exact text of the option.
+                If none fit well, return "SKIP".
+                """
+                
                 try:
-                    option_texts = [text for _, text in potential_categories[:15]]  # Limit for token efficiency
-                    
-                    context = f"Product: '{listing_data.get('title', '')}'"
-                    if listing_data.get('description'):
-                        context += f" Description: '{listing_data.get('description', '')[:100]}...'"
-                    
-                    prompt = f"""
-                    {context}
-                    Category selection level {depth + 1}.
-                    
-                    Choose the BEST category from this list:
-                    {', '.join(option_texts)}
-                    
-                    Return ONLY the exact text from the list that best matches the product, nothing else.
-                    If none seem appropriate, return "SKIP".
-                    """
-                    
                     response = self.gemini_model.generate_content(prompt)
-                    if response and hasattr(response, 'text') and response.text:
-                        gemini_choice = response.text.strip()
-                        print(f"Gemini suggested at level {depth + 1}: '{gemini_choice}'")
+                    if response and response.text:
+                        choice = response.text.strip().replace('"', '')
+                        print(f"Gemini chose: {choice}")
                         
-                        if gemini_choice.upper() != "SKIP":
-                            # Find the option that matches Gemini's choice
-                            for span, text in potential_categories:
-                                if (gemini_choice.lower() in text.lower() or 
-                                    text.lower() in gemini_choice.lower() or
-                                    SequenceMatcher(None, gemini_choice.lower(), text.lower()).ratio() > 0.7):
-                                    selected_category = (span, text)
-                                    break
-                        else:
-                            print("Gemini suggested to skip this level")
+                        if choice == "SKIP":
+                            print("Gemini decided to skip.")
                             return
-                
+
+                        # Find and click the chosen option
+                        clicked = False
+                        for span, text in potential_options:
+                            if text.lower() == choice.lower() or choice.lower() in text.lower():
+                                print(f"Clicking option: {text}")
+                                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", span)
+                                time.sleep(0.5)
+                                try:
+                                    span.click()
+                                except:
+                                    self.driver.execute_script("arguments[0].click();", span)
+                                clicked = True
+                                break
+                        
+                        if clicked:
+                            time.sleep(2)
+                            # Recursively check for next level
+                            self._handle_nested_category_selection(listing_data, depth + 1, max_depth)
+                            return
+                        else:
+                            print(f"Could not find element for choice: {choice}")
+
                 except Exception as e:
-                    print(f"Gemini selection error at level {depth + 1}: {e}")
+                    print(f"Gemini error: {e}")
             
-            # If Gemini didn't pick or failed, use similarity matching with the product title
-            if not selected_category and potential_categories:
-                product_title = listing_data.get('title', '').lower()
-                best_span = None
-                best_score = 0.0
-                
-                for span, text in potential_categories:
-                    # Calculate similarity score
-                    score = SequenceMatcher(None, text.lower(), product_title).ratio()
-                    
-                    # Boost score for certain keywords that are relevant to the product
-                    if any(keyword in text.lower() for keyword in ['audio', 'headphone', 'speaker', 'electronic', 'music']):
-                        score += 0.2
-                    
-                    if score > best_score and score > 0.3:  # Minimum threshold
-                        best_score = score
-                        best_span = (span, text)
-                
-                selected_category = best_span
-            
-            # Click the selected category if found
-            if selected_category:
-                span, text = selected_category
+            # Fallback if Gemini fails or not available: Pick first relevant looking option
+            print("Fallback: Picking first option")
+            if potential_options:
+                span, text = potential_options[0]
                 try:
-                    # Scroll element into view
-                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", span)
-                    time.sleep(0.5)
-                    
-                    # Try clicking
-                    try:
-                        span.click()
-                        print(f"[OK] Selected category at level {depth + 1}: '{text}'")
-                    except Exception:
-                        self.driver.execute_script("arguments[0].click();", span)
-                        print(f"[OK] Selected category at level {depth + 1} with JS: '{text}'")
-                    
+                    span.click()
                     time.sleep(2)
-                    
-                    # Recursively check for next level
                     self._handle_nested_category_selection(listing_data, depth + 1, max_depth)
-                    
-                except Exception as e:
-                    print(f"[WARNING] Failed to click category '{text}' at level {depth + 1}: {e}")
-            else:
-                print(f"[OK] No suitable category found at level {depth + 1}, stopping recursion")
-                
+                except:
+                    pass
+
         except Exception as e:
-            print(f"[WARNING] Error in nested category selection at depth {depth}: {e}")
+            print(f"[WARNING] Error in nested category selection: {e}")
+
+    def log_page_source(self, step_name: str):
+        """Log current page HTML for debugging selectors"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"debug_fb_{step_name}_{timestamp}.html"
+            filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            print(f"[DEBUG] Saved HTML snapshot to: {filepath}")
+        except Exception as e:
+            print(f"[WARNING] Failed to save HTML snapshot: {e}")
 
     def create_facebook_listing(self, listing_data: Dict) -> Dict:
         """Create Facebook Marketplace listing using Selenium with exact selectors"""
         try:
-            if not self.ensure_facebook_access():
-                return {'error': 'Facebook access failed', 'platform': 'facebook'}
+            # Ensure browser is running
+            if not self.driver:
+                print("🔄 Browser not running, starting now...")
+                self.start_browser(headless=False)  # Force visible browser for debugging
             
+            if not self.check_facebook_login():
+                print("⚠️ Not logged in to Facebook. Attempting login flow...")
+                if not self.facebook_login_flow():
+                    return {"success": False, "error": "Facebook login failed"}
+            
+            print("✅ Logged in to Facebook. Navigating to create listing page...")
+            self.driver.get("https://www.facebook.com/marketplace/create/item")
+            
+            # Log HTML before starting interaction
+            self.log_page_source("1_create_page_loaded")
+
             print("📝 Creating Facebook Marketplace listing...")
             wait = WebDriverWait(self.driver, 15)
             
-            # Go directly to the create item page
-            self.driver.get("https://www.facebook.com/marketplace/create/item")
-            time.sleep(3)
-            # Fill out the listing form using exact selectors provided
-            
-
-            # Title - using robust CSS selector and id
+            # --- TITLE ---
             try:
-                title_field = wait.until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='text'][id^='_r_'][class*='xjbqb8w']"))
+                selector = "//label[.//span[text()='Title']]//input"
+                value = listing_data['title']
+                print(f"   [SELECTOR] Waiting for Title input: {selector}")
+                print(f"   [DATA] Filling Title: '{value}'")
+                
+                title_input = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
                 )
-                title_field.clear()
-                title_field.send_keys(listing_data['title'])
+                title_input.clear()
+                title_input.send_keys(value)
+                print("[OK] Title filled")
             except TimeoutException:
+                self.log_page_source("error_title_not_found")
                 return {'error': 'Could not find title field', 'platform': 'facebook'}
 
-            # Price - improved selection for price field
+            # --- PRICE ---
             try:
-                # Wait for all text inputs and select the one below the Title
-                inputs = wait.until(lambda d: d.find_elements(By.CSS_SELECTOR, "input[type='text'][id^='_r_'][class*='xjbqb8w']"))
-                if len(inputs) > 1:
-                    price_field = inputs[1]
-                else:
-                    # Fallback: try to find by placeholder or aria-label
-                    price_field = wait.until(
-                        EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Price'] | //input[@aria-label='Price']"))
-                    )
-                price_field.clear()
-                price_field.send_keys(str(int(listing_data['price'])))
+                selector = "//label[.//span[text()='Price']]//input"
+                
+                # Format price: Round to nearest integer for Facebook to avoid decimal issues
+                price_val = listing_data['price']
+                print(f"   [DEBUG] Calculated Price Value: {price_val}")
+                
+                try:
+                    # Round to nearest integer
+                    value = str(int(round(float(price_val))))
+                except:
+                    value = str(price_val)
+                    
+                print(f"   [SELECTOR] Waiting for Price input: {selector}")
+                print(f"   [DATA] Filling Price: '{value}' (Raw: {price_val})")
+                
+                price_input = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                
+                # Robust clearing
+                price_input.click()
+                time.sleep(0.5)
+                price_input.send_keys(Keys.CONTROL + "a")
+                time.sleep(0.2)
+                price_input.send_keys(Keys.DELETE)
+                time.sleep(0.2)
+                
+                # Type value
+                price_input.send_keys(value)
+                print("[OK] Price filled")
             except Exception as e:
+                self.log_page_source("error_price_failed")
                 print(f"[WARNING] Could not find or fill price field: {e}")
             
-            # Category - use Gemini API to predict best category/subcategory
+            # --- CATEGORY ---
             try:
-                # We'll use Gemini to choose from actual available options instead of predicting
-                fb_category = 'Electronics'  # fallback
-                fb_subcategory = None
+                selector = "//label[.//span[text()='Category']]"
+                print(f"   [SELECTOR] Waiting for Category dropdown: {selector}")
+                
+                # 1. Click the Category dropdown
+                category_label = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", category_label)
+                time.sleep(0.5) # Reduced sleep
+                category_label.click()
+                time.sleep(1) # Reduced sleep
 
-                # Click the category dropdown/button (do not type)
+                # 2. Use Recursive Gemini Selection
+                self._handle_nested_category_selection(listing_data)
+                print(f"[OK] Category selection completed")
+
+            except Exception as e:
+                self.log_page_source("error_category_failed")
+                print(f"[WARNING] Could not select category: {e}")
+
+            # --- CONDITION ---
+            try:
+                selector = "//label[.//span[text()='Condition']]"
+                print(f"   [SELECTOR] Waiting for Condition dropdown: {selector}")
+                
+                # 1. Click the Condition dropdown
+                condition_label = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", condition_label)
+                time.sleep(0.5) # Reduced sleep
+                
                 try:
-                    # Try multiple selectors to find the category field - looking for the specific blue-bordered dropdown
-                    category_button = None
-                    selectors = [
-                        "//label[contains(@class, 'x1i10hfl') and .//span[text()='Category']]",
-                        "//div[contains(@class, 'x1i10hfl') and .//span[text()='Category']]",
-                        "//label[@role='combobox' and .//span[contains(text(), 'Category')]]",
-                        "//div[@role='combobox' and .//span[contains(text(), 'Category')]]",
-                        "//span[text()='Category']/ancestor::label",
-                        "//span[text()='Category']/parent::*/parent::*/parent::*",
-                        "//input[contains(@placeholder, 'Type to search') or contains(@aria-label, 'Category')]/ancestor::label",
-                        "//div[contains(@style, 'border') and .//span[text()='Category']]"
-                    ]
-                    
-                    for i, selector in enumerate(selectors):
-                        try:
-                            elements = self.driver.find_elements(By.XPATH, selector)
-                            if elements:
-                                category_button = elements[0]
-                                print(f"[OK] Found category button with selector {i+1}: {selector}")
-                                break
-                        except Exception:
-                            continue
-                    
-                    if not category_button:
-                        print("[WARNING] Could not find category button with any selector")
-                        # Try to find any clickable element with "Category" text
-                        try:
-                            category_elements = self.driver.find_elements(By.XPATH, "//span[text()='Category']")
-                            if category_elements:
-                                # Try clicking the parent elements
-                                for elem in category_elements:
-                                    parent = elem.find_element(By.XPATH, "./..")
-                                    if parent.tag_name in ['label', 'div', 'button']:
-                                        category_button = parent
-                                        print("[OK] Found category button by traversing from text element")
-                                        break
-                        except Exception:
-                            pass
-                    
-                    if not category_button:
-                        raise Exception("Category button not found")
-                    
-                    # Scroll to element and click
-                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", category_button)
-                    time.sleep(1)
-                    
-                    # Try multiple click methods
-                    try:
-                        category_button.click()
-                        print("[OK] Clicked category button with standard click")
-                    except Exception:
-                        try:
-                            self.driver.execute_script("arguments[0].click();", category_button)
-                            print("[OK] Clicked category button with JavaScript click")
-                        except Exception:
-                            # Find any input field inside and click it
-                            try:
-                                input_field = category_button.find_element(By.XPATH, ".//input")
-                                input_field.click()
-                                print("[OK] Clicked input field inside category button")
-                            except Exception:
-                                raise Exception("Could not click category button")
-                    
-                    time.sleep(3)  # Wait longer for dropdown to appear
-
-                    # Check if dropdown opened by looking for category options
-                    dropdown_opened = False
-                    try:
-                        # Look for visible category options in dropdown
-                        dropdown_options = self.driver.find_elements(By.XPATH, "//div[contains(@role, 'option') or contains(@class, 'menu') or contains(@class, 'dropdown')]//span[contains(text(), 'Electronics') or contains(text(), 'Antiques') or contains(text(), 'Arts') or contains(text(), 'Vehicle') or contains(text(), 'Mobile')]")
-                        if dropdown_options:
-                            dropdown_opened = True
-                            print(f"[OK] Dropdown opened - found {len(dropdown_options)} category options")
-                        else:
-                            # Alternative check - look for any list of options that appeared
-                            all_options = self.driver.find_elements(By.XPATH, "//div[contains(@style, 'position') or contains(@role, 'listbox')]//span")
-                            visible_options = [opt for opt in all_options if opt.is_displayed() and opt.text.strip()]
-                            if len(visible_options) > 5:  # If we see many options, dropdown probably opened
-                                dropdown_opened = True
-                                print(f"[OK] Dropdown likely opened - found {len(visible_options)} visible options")
-                    except Exception as e:
-                        print(f"Could not verify dropdown status: {e}")
-                    
-                    if not dropdown_opened:
-                        print("[WARNING] Dropdown may not have opened, trying alternative approach")
-                        # Try typing in the category field to trigger dropdown
-                        try:
-                            input_field = category_button.find_element(By.XPATH, ".//input")
-                            input_field.clear()
-                            input_field.send_keys(fb_category[:3])  # Type first 3 letters to trigger dropdown
-                            time.sleep(2)
-                            print(f"[OK] Typed '{fb_category[:3]}' to trigger dropdown")
-                        except Exception:
-                            print("[WARNING] Could not type in category field either")
-
-                    # Refresh elements to avoid stale references and get real category options
-                    time.sleep(1)  # Let DOM settle
-                    
-                    # Get fresh category options that are actually categories
-                    category_options = []
-                    try:
-                        # Look for elements that appear after clicking category dropdown
-                        all_spans = self.driver.find_elements(By.XPATH, "//span[string-length(text()) > 2 and string-length(text()) < 50]")
-                        
-                        # Known Facebook category names to look for
-                        known_categories = [
-                            'Electronics', 'Antiques and collectibles', 'Arts and crafts', 'Vehicle parts and accessories',
-                            'Baby products', 'Books, films and music', 'Mobile phones and accessories', 
-                            'Clothing, shoes and accessories', 'Home and garden', 'Sports and outdoors',
-                            'Tools and hardware', 'Musical instruments', 'Pet supplies', 'Toys and games',
-                            'Health and beauty', 'Jewellery and watches', 'Computers and software'
-                        ]
-                        
-                        for span in all_spans:
-                            try:
-                                if span.is_displayed():
-                                    text = span.text.strip()
-                                    # Check if this looks like a category
-                                    if any(cat.lower() in text.lower() or text.lower() in cat.lower() for cat in known_categories):
-                                        category_options.append((span, text))
-                            except:
-                                continue
-                        
-                        # If we don't find known categories, look for clickable spans in dropdown areas
-                        if not category_options:
-                            dropdown_spans = self.driver.find_elements(By.XPATH, "//div[contains(@role, 'listbox') or contains(@class, 'menu')]//span | //div[contains(@style, 'position') and contains(@style, 'absolute')]//span")
-                            for span in dropdown_spans:
-                                try:
-                                    if span.is_displayed():
-                                        text = span.text.strip()
-                                        if (len(text) > 3 and len(text) < 50 and 
-                                            not text.isdigit() and 
-                                            'notification' not in text.lower() and
-                                            'unread' not in text.lower() and
-                                            text not in ['Photos', 'Videos', 'Add photos', 'Add video', 'Save Draft']):
-                                            category_options.append((span, text))
-                                except:
-                                    continue
-                    
-                    except Exception as e:
-                        print(f"Error getting category options: {e}")
-                    
-                    print(f"Found {len(category_options)} category options: {[text for _, text in category_options[:10]]}")
-                    
-                    if not category_options:
-                        print("[WARNING] No category options found")
-                        raise Exception("No category options available")
-                    
-                    # Use Gemini to pick the best option from what's actually available
-                    selected_category = None
-                    if self.gemini_model and len(category_options) > 0:
-                        try:
-                            option_texts = [text for _, text in category_options[:15]]  # Limit to first 15 to avoid token limits
-                            prompt = f"""
-                            Given the product: '{listing_data.get('title', '')}' 
-                            Description: '{listing_data.get('description', '')[:100]}...'
-                            
-                            Choose the BEST category from this exact list:
-                            {', '.join(option_texts)}
-                            
-                            Return ONLY the exact text from the list, nothing else.
-                            """
-                            
-                            response = self.gemini_model.generate_content(prompt)
-                            if response and hasattr(response, 'text') and response.text:
-                                gemini_choice = response.text.strip()
-                                print(f"Gemini suggested: '{gemini_choice}'")
-                                
-                                # Find the option that matches Gemini's choice
-                                for span, text in category_options:
-                                    if gemini_choice.lower() in text.lower() or text.lower() in gemini_choice.lower():
-                                        selected_category = (span, text)
-                                        break
-                        
-                        except Exception as e:
-                            print(f"Gemini category selection error: {e}")
-                    
-                    # If Gemini didn't pick or failed, use similarity matching
-                    if not selected_category:
-                        best_span = None
-                        best_score = 0.0
-                        for span, text in category_options:
-                            score = SequenceMatcher(None, text.lower(), fb_category.lower()).ratio()
-                            if score > best_score:
-                                best_score = score
-                                best_span = (span, text)
-                        selected_category = best_span
-                    
-                    # Click the selected category
-                    if selected_category:
-                        span, text = selected_category
-                        try:
-                            # Scroll element into view
-                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", span)
-                            time.sleep(0.5)
-                            
-                            # Try clicking
-                            span.click()
-                            print(f"[OK] Selected category: '{text}'")
-                            time.sleep(2)
-                        except Exception as e:
-                            print(f"Failed to click category '{text}': {e}")
-                            # Try JavaScript click as fallback
-                            try:
-                                self.driver.execute_script("arguments[0].click();", span)
-                                print(f"[OK] Selected category with JS click: '{text}'")
-                                time.sleep(2)
-                            except Exception as e2:
-                                print(f"Failed JS click too: {e2}")
-                    else:
-                        print("[WARNING] Could not find a suitable category to select")
-
-                    # Handle nested category selection (can be n-levels deep)
-                    self._handle_nested_category_selection(listing_data)
-                    
+                    condition_label.click()
                 except Exception as e:
-                    print(f"[WARNING] Could not select category/subcategory: {e}")
+                    if "click intercepted" in str(e):
+                        print("[WARNING] Click intercepted. Attempting to close blocking elements (ESC)...")
+                        webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                        time.sleep(1)
+                        condition_label.click()
+                    else:
+                        raise e
+
+                time.sleep(1) # Reduced sleep
+
+                # 2. Select Condition Option
+                condition_map = {
+                    'new': 'New',
+                    'like_new': 'Used – like new',
+                    'good': 'Used – good', 
+                    'fair': 'Used – fair',
+                    'poor': 'Used – fair',
+                    'used': 'Used – good'
+                }
+                fb_condition = condition_map.get(listing_data.get('condition', 'used'), 'Used – good')
+                option_selector = f"//span[text()='{fb_condition}']"
+                print(f"   [SELECTOR] Waiting for Condition option: {option_selector}")
+                print(f"   [DATA] Selecting Condition: '{fb_condition}'")
+
+                condition_option = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, option_selector))
+                )
+                condition_option.click()
+                print(f"[OK] Condition '{fb_condition}' selected")
+                time.sleep(0.5) # Reduced sleep
+
             except Exception as e:
-                print(f"[WARNING] Could not select category/subcategory: {e}")
-            
-            # Condition - handle the dropdown properly with better element detection
-            try:
-                # Wait a bit for page to settle after category/subcategory selection
-                time.sleep(2)
-                
-                # Try multiple approaches to find condition dropdown
-                condition_dropdown = None
-                condition_selectors = [
-                    "//label[@role='combobox' and .//span[text()='Condition']]",
-                    "//span[text()='Condition']/ancestor::label[@role='combobox']",
-                    "//div[.//span[text()='Condition'] and @role='combobox']",
-                    "//label[contains(@class, 'x78zum5') and .//span[text()='Condition']]"
-                ]
-                
-                for selector in condition_selectors:
-                    try:
-                        elements = self.driver.find_elements(By.XPATH, selector)
-                        if elements:
-                            condition_dropdown = elements[0]
-                            print(f"[OK] Found condition dropdown with selector: {selector}")
-                            break
-                    except:
-                        continue
-                
-                if condition_dropdown:
-                    # Scroll into view and wait
-                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", condition_dropdown)
-                    time.sleep(1)
-                    
-                    # Try clicking with different methods
-                    try:
-                        condition_dropdown.click()
-                        print("[OK] Clicked condition dropdown")
-                    except Exception:
-                        try:
-                            self.driver.execute_script("arguments[0].click();", condition_dropdown)
-                            print("[OK] Clicked condition dropdown with JS")
-                        except Exception:
-                            print("[WARNING] Could not click condition dropdown")
-                            raise Exception("Condition dropdown click failed")
-                    
-                    time.sleep(2)
-                    
-                    # Map conditions to Facebook options
-                    condition_map = {
-                        'new': 'New',
-                        'like_new': 'Used – like new',
-                        'good': 'Used – good', 
-                        'fair': 'Used – fair',
-                        'poor': 'Used – fair',
-                        'used': 'Used – good'  # Default
-                    }
-                    
-                    fb_condition = condition_map.get(listing_data.get('condition', 'used'), 'Used – good')
-                    
-                    # Wait for condition options to appear and select
-                    try:
-                        condition_option = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, f"//span[text()='{fb_condition}']"))
-                        )
-                        condition_option.click()
-                        print(f"[OK] Selected condition: {fb_condition}")
-                    except TimeoutException:
-                        print(f"[WARNING] Could not find condition option: {fb_condition}")
-                else:
-                    print("[WARNING] Could not find condition dropdown")
-                
-            except Exception as e:
+                self.log_page_source("error_condition_failed")
                 print(f"[WARNING] Could not set condition: {e}")
             
-            # Description - using the textarea structure you provided
+            # --- DESCRIPTION ---
             try:
-                description_field = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//span[text()='Description']/ancestor::label//textarea | //textarea[@id[contains(., '_r_')]]"))
+                selector = "//label[.//span[text()='Description']]//textarea"
+                value = listing_data['description'][:50] + "..." # Truncate for log
+                print(f"   [SELECTOR] Waiting for Description input: {selector}")
+                print(f"   [DATA] Filling Description: '{value}'")
+                
+                description_area = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
                 )
-                description_field.clear()
-                description_field.send_keys(listing_data['description'])
+                description_area.clear()
+                description_area.send_keys(listing_data['description'])
+                print("[OK] Description filled")
             except TimeoutException:
+                self.log_page_source("error_description_failed")
                 return {'error': 'Could not find description field', 'platform': 'facebook'}
             
-            # Upload the first image from Downloads folder
-            import glob
-            import os
-            downloads_folder = os.path.join(os.path.expanduser('~'), 'Downloads')
-            image_files = glob.glob(os.path.join(downloads_folder, '*.jpg')) + glob.glob(os.path.join(downloads_folder, '*.png'))
-            if image_files:
-                image_path = image_files[0]
-                try:
-                    file_input = self.driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-                    file_input.send_keys(image_path)
-                    time.sleep(2)  # Wait for upload
-                    print(f"[OK] Uploaded image: {image_path}")
-                except Exception as e:
-                    print(f"[WARNING] Could not upload photo: {e}")
-            else:
-                print("[WARNING] No image found in Downloads folder to upload.")
-
-            # Click the publish button to complete the listing
+            # --- PHOTOS ---
             try:
+                print("📸 Uploading Photos...")
+                # Check if we have a specific image path passed
+                image_path = listing_data.get('image_path')
+                
+                if not image_path:
+                    print("[WARNING] No image path provided for upload.")
+                
+                if image_path:
+                    # Ensure absolute path
+                    image_path = os.path.abspath(image_path)
+                    
+                    if os.path.exists(image_path):
+                        selector = "//input[@type='file']"
+                        print(f"   [SELECTOR] Finding file inputs: {selector}")
+                        print(f"   [DATA] Uploading image: {image_path}")
+                        
+                        # Try multiple file input selectors
+                        file_inputs = self.driver.find_elements(By.XPATH, selector)
+                        uploaded = False
+                        
+                        if not file_inputs:
+                             print("[WARNING] No file inputs found!")
+                        
+                        for i, file_input in enumerate(file_inputs):
+                            try:
+                                print(f"   [DEBUG] Trying file input #{i+1}")
+                                # Unhide input if hidden (common in React apps)
+                                self.driver.execute_script("arguments[0].style.display = 'block';", file_input)
+                                file_input.send_keys(image_path)
+                                uploaded = True
+                                print(f"[OK] Uploaded image to input #{i+1}: {image_path}")
+                                break # Stop after first success
+                            except Exception as e:
+                                print(f"[DEBUG] Failed to upload to input #{i+1}: {e}")
+                        
+                        if not uploaded:
+                             print("[WARNING] Could not upload photo to any file input")
+                        else:
+                             time.sleep(5) # Wait for upload to process
+                    else:
+                        print(f"[WARNING] Image file does not exist at path: {image_path}")
+                else:
+                    print("[WARNING] No image found to upload.")
+            except Exception as e:
+                self.log_page_source("error_photos_failed")
+                print(f"[WARNING] Could not upload photo: {e}")
+
+            # --- PUBLISH ---
+            try:
+                print("🚀 Publishing...")
                 publish_button = wait.until(
                     EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Publish']"))
                 )
@@ -1006,6 +904,7 @@ Guidelines:
                 # Check if button is disabled first
                 is_disabled = publish_button.get_attribute('aria-disabled') == 'true'
                 if is_disabled:
+                    self.log_page_source("publish_disabled")
                     return {
                         'success': True,
                         'platform': 'facebook',
@@ -1017,116 +916,42 @@ Guidelines:
                 self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", publish_button)
                 time.sleep(1)
                 
+                publish_button.click()
+                print("[OK] Clicked Publish button!")
+                
+                # Wait for publish to process
+                print("⏳ Waiting for publish to complete...")
+                time.sleep(5)
+                
+                # Check for dialogs, but ignore 'Leave Page' initially to avoid cancelling the publish
+                # if it's just a transient redirect confirmation
+                if self.handle_facebook_confirmation_dialogs(exclude=['Leave Page']):
+                    print("[OK] Handled confirmation dialog (excluding Leave Page)")
+                
+                # Wait and check for dialogs multiple times
+                print("⏳ Waiting for confirmation dialogs...")
+                for i in range(5):
+                    time.sleep(2)
+                    # Now we can handle all dialogs if they persist
+                    if self.handle_facebook_confirmation_dialogs():
+                        print("[OK] Handled confirmation dialog")
+                        break
+                    print(f"   ... checking for dialogs (attempt {i+1}/5)")
+                    
+                # Final check: If we are still on the create page, something might be wrong
                 try:
-                    publish_button.click()
-                    print("[OK] Clicked Publish button!")
-                    time.sleep(3)  # Wait for publish to process
+                    if "create" in self.driver.current_url.lower():
+                        print("[WARNING] Still on create page after publishing. Listing might not be live.")
+                except:
+                    pass
                     
-                    # Handle "Leave Page?" confirmation dialog if it appears
-                    try:
-                        print("🔍 Checking for 'Leave Page?' confirmation dialog...")
-                        
-                        # Look for the "Leave Page" button with specific selectors
-                        leave_page_selectors = [
-                            "//div[@aria-label='Leave Page']",
-                            "//div[contains(@class, 'x1i10hfl') and @aria-label='Leave Page']",
-                            "//span[text()='Leave Page']/ancestor::div[@role='button']",
-                            "//span[contains(text(), 'Leave Page')]/ancestor::div[@role='button']",
-                            "//div[@role='button' and .//span[text()='Leave Page']]"
-                        ]
-                        
-                        leave_page_button = None
-                        for selector in leave_page_selectors:
-                            try:
-                                elements = self.driver.find_elements(By.XPATH, selector)
-                                if elements and elements[0].is_displayed():
-                                    leave_page_button = elements[0]
-                                    print(f"[OK] Found 'Leave Page' button with selector: {selector}")
-                                    break
-                            except Exception:
-                                continue
-                        
-                        if leave_page_button:
-                            print("🖱️ Clicking 'Leave Page' to continue...")
-                            try:
-                                leave_page_button.click()
-                                print("[OK] Successfully clicked 'Leave Page' button")
-                                time.sleep(2)
-                            except Exception:
-                                try:
-                                    self.driver.execute_script("arguments[0].click();", leave_page_button)
-                                    print("[OK] Successfully clicked 'Leave Page' button with JavaScript")
-                                    time.sleep(2)
-                                except Exception as e:
-                                    print(f"[WARNING] Failed to click 'Leave Page' button: {e}")
-                        else:
-                            print("📝 No 'Leave Page' dialog found, continuing...")
-                            
-                    except Exception as e:
-                        print(f"[WARNING] Error handling 'Leave Page' dialog: {e}")
-                    
-                    time.sleep(2)  # Additional wait after handling dialog
-                    
-                    # Check if listing was successfully published
-                    try:
-                        # First, handle any remaining confirmation dialogs
-                        self.handle_facebook_confirmation_dialogs()
-                        
-                        # Look for success indicators or redirect to marketplace
-                        current_url = self.driver.current_url
-                        if 'marketplace' in current_url and 'create' not in current_url:
-                            return {
-                                'success': True,
-                                'platform': 'facebook',
-                                'status': 'published',
-                                'message': 'Facebook listing published successfully!',
-                                'listing_url': current_url
-                            }
-                        else:
-                            # Wait a bit more and check again
-                            time.sleep(3)
-                            # Handle any additional dialogs that might appear
-                            self.handle_facebook_confirmation_dialogs()
-                            current_url = self.driver.current_url
-                            return {
-                                'success': True,
-                                'platform': 'facebook',
-                                'status': 'publish_attempted',
-                                'message': 'Publish button clicked. Please verify listing was created.',
-                                'current_url': current_url
-                            }
-                    except Exception as e:
-                        # Try to handle any dialogs one more time
-                        self.handle_facebook_confirmation_dialogs()
-                        return {
-                            'success': True,
-                            'platform': 'facebook',
-                            'status': 'publish_attempted',
-                            'message': 'Publish button clicked successfully. Listing should be live.'
-                        }
-                        
-                except Exception as e:
-                    # Try JavaScript click as fallback
-                    try:
-                        self.driver.execute_script("arguments[0].click();", publish_button)
-                        print("[OK] Clicked Publish button with JavaScript!")
-                        time.sleep(3)
-                        
-                        return {
-                            'success': True,
-                            'platform': 'facebook',
-                            'status': 'published',
-                            'message': 'Facebook listing published successfully with JS click!'
-                        }
-                    except Exception as e2:
-                        print(f"[WARNING] Failed to click publish button: {e2}")
-                        return {
-                            'success': True,
-                            'platform': 'facebook',
-                            'status': 'ready_to_publish',
-                            'message': 'Listing form completed. Please manually click Publish to complete.'
-                        }
-                        
+                return {
+                    'success': True,
+                    'platform': 'facebook',
+                    'status': 'published',
+                    'message': 'Facebook listing published successfully!'
+                }
+
             except TimeoutException:
                 print("[WARNING] Could not find publish button")
                 return {
@@ -1138,6 +963,7 @@ Guidelines:
             
         except Exception as e:
             print(f"[ERROR] Facebook listing creation failed: {e}")
+            self.log_page_source("fatal_error")
             return {'error': f'Facebook listing failed: {str(e)}', 'platform': 'facebook'}
     
     def create_ebay_listing(self, listing_data: Dict) -> Dict:
@@ -1296,7 +1122,7 @@ Guidelines:
             print(f"[ERROR] eBay listing creation failed: {e}")
             return {'error': f'eBay listing failed: {str(e)}', 'platform': 'ebay'}
     
-    def create_listings(self, product_data: Dict, pricing_data: Dict, platforms: List[str]) -> Dict:
+    def create_listings(self, product_data: Dict, pricing_data: Dict, platforms: List[str], images: List[str] = None) -> Dict:
         """Create listings on specified platforms"""
         results = {}
         
@@ -1309,15 +1135,36 @@ Guidelines:
             condition
         )
         
+        # Handle base64 images
+        image_path = None
+        if images and len(images) > 0:
+            try:
+                import base64
+                import tempfile
+                
+                # Create temp file
+                fd, path = tempfile.mkstemp(suffix='.jpg')
+                with os.fdopen(fd, 'wb') as f:
+                    # Remove header if present (data:image/jpeg;base64,...)
+                    img_data = images[0]
+                    if ',' in img_data:
+                        img_data = img_data.split(',')[1]
+                    f.write(base64.b64decode(img_data))
+                image_path = path
+                print(f"[OK] Saved base64 image to {image_path}")
+            except Exception as e:
+                print(f"[ERROR] Failed to save base64 image: {e}")
+
         listing_data = {
             'title': product_data.get('name', 'Unknown Product')[:75],  # Limit for platforms
-            'price': optimal_price,
+            'price': product_data.get('price', optimal_price), # Use provided price if available
             'condition': condition,
             'description': description,
-            'category': product_data.get('category', 'Electronics')
+            'category': product_data.get('category', 'Electronics'),
+            'image_path': image_path
         }
         
-        print(f"📋 Creating listings for: {listing_data['title']} at ${optimal_price}")
+        print(f"📋 Creating listings for: {listing_data['title']} at ${listing_data['price']}")
         
         # Create Facebook listing
         if 'facebook' in platforms:
@@ -1342,20 +1189,34 @@ Guidelines:
             
             print("[ROCKET] Starting Facebook message monitoring...")
             
-            monitor = FacebookMessageMonitor()
-            monitor.lister = self  # Use this lister's browser session
+            self.monitor = FacebookMessageMonitor()
+            self.monitor.lister = self  # Use this lister's browser session
             
             # Start monitoring in background thread
-            monitor_thread = threading.Thread(target=monitor.start_monitoring)
+            monitor_thread = threading.Thread(target=self.monitor.start_monitoring)
             monitor_thread.daemon = True  # Dies when main program exits
             monitor_thread.start()
             
             print("[OK] Facebook message monitor started in background")
-            return monitor
+            return self.monitor
             
         except Exception as e:
             print(f"[ERROR] Failed to start message monitor: {e}")
             return None
+
+    def send_facebook_message(self, buyer_name: str, message_text: str) -> bool:
+        """Send a Facebook message using the monitor instance"""
+        if not self.monitor:
+            # Try to start monitor if not running, or at least initialize it
+            from facebook_monitor import FacebookMessageMonitor
+            self.monitor = FacebookMessageMonitor()
+            self.monitor.lister = self
+            self.monitor.scraper.driver = self.driver # Share driver
+            
+        if not self.driver:
+            self.start_browser(headless=False)
+            
+        return self.monitor.send_message(buyer_name, message_text)
     
     def close(self):
         """Clean up resources"""
@@ -1421,11 +1282,12 @@ def create_listings():
         "product": {
             "name": "Anker Soundcore Liberty 4 NC",
             "condition": "used",
-            "category": "Electronics"
+            "category": "Electronics",
+            "price": 35.00 // Optional override
         },
         "pricing_data": {pricing data from price scraper},
         "platforms": ["facebook", "ebay"],
-        "images": ["base64_image_data"] // optional for now
+        "images": ["base64_image_data"] // optional
     }
     """
     try:
@@ -1457,6 +1319,7 @@ def create_listings():
         product_data = data['product']
         pricing_data = data['pricing_data']
         platforms = data.get('platforms', ['facebook', 'ebay'])
+        images = data.get('images', [])
         
         # Validate platforms
         valid_platforms = ['facebook', 'ebay']
@@ -1470,7 +1333,7 @@ def create_listings():
             }), 400
         
         # Create listings
-        result = lister.create_listings(product_data, pricing_data, platforms)
+        result = lister.create_listings(product_data, pricing_data, platforms, images)
         
         # Check if any listings succeeded
         successes = [r for r in result['listings'].values() if r.get('success')]
@@ -1518,7 +1381,8 @@ def create_facebook_listing_only():
         result = lister.create_listings(
             data['product'], 
             data['pricing_data'], 
-            ['facebook']
+            ['facebook'],
+            data.get('images', [])
         )
         
         fb_result = result['listings'].get('facebook', {})
@@ -1551,7 +1415,8 @@ def create_ebay_listing_only():
         result = lister.create_listings(
             data['product'], 
             data['pricing_data'], 
-            ['ebay']
+            ['ebay'],
+            data.get('images', [])
         )
         
         ebay_result = result['listings'].get('ebay', {})
@@ -1634,7 +1499,8 @@ if __name__ == '__main__':
     print("[ROCKET] Ready for hackathon!")
     
     try:
-        app.run(debug=True, host='0.0.0.0', port=3003)
+        # Disable reloader to prevent crashes during Selenium execution if files change
+        app.run(debug=True, use_reloader=False, host='0.0.0.0', port=3003)
     except Exception as e:
         print(f"[ERROR] Server error: {e}")
     finally:

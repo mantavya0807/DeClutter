@@ -1,0 +1,204 @@
+Decluttered.AI API Error Log
+============================
+Initialized: 2025-11-19
+
+[2025-11-19 19:34:46.172614] Error in perform_google_reverse_search:
+Traceback (most recent call last):
+  File "D:\Projects\MHacks25\Decluttered.ai\apps\api\main.py", line 687, in perform_google_reverse_search
+    self.driver.get("https://images.google.com/imghp?hl=en&tab=wi")
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 483, in get
+    self.execute(Command.GET, {"url": url})
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 458, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\errorhandler.py", line 233, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.InvalidSessionIdException: Message: invalid session id; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x1094103
+	0x1094144
+	0xe9e56b
+	0xedce58
+	0xf0c7c6
+	0xf08030
+	0xf07563
+	0xe6e4dd
+	0xe6ea6e
+	0xe6ef3d
+	0x13057b4
+	0x130098a
+	0x10bc392
+	0x10ac4c8
+	0x10b324d
+	0xe6e193
+	0xe6d848
+	0x145b0cf
+	0x769a5d49
+	0x77a0d6db
+	0x77a0d661
+
+
+[2025-11-19 23:26:43.182720] Error in perform_google_reverse_search:
+Traceback (most recent call last):
+  File "D:\Projects\MHacks25\Decluttered.ai\apps\api\main.py", line 687, in perform_google_reverse_search
+    self.driver.get("https://images.google.com/imghp?hl=en&tab=wi")
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 483, in get
+    self.execute(Command.GET, {"url": url})
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 458, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\errorhandler.py", line 233, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.InvalidSessionIdException: Message: invalid session id; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x1094103
+	0x1094144
+	0xe9e56b
+	0xedce58
+	0xf0c7c6
+	0xf08030
+	0xf07563
+	0xe6e4dd
+	0xe6ea6e
+	0xe6ef3d
+	0x13057b4
+	0x130098a
+	0x10bc392
+	0x10ac4c8
+	0x10b324d
+	0xe6e193
+	0xe6d848
+	0x145b0cf
+	0x769a5d49
+	0x77a0d6db
+	0x77a0d661
+
+[2025-11-20 00:39:31.343952] Browser start failed: Message: session not created: Chrome instance exited. Examine ChromeDriver verbose log to determine the cause.; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#sessionnotcreatedexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x974103
+	0x974144
+	0x77e71d
+	0x7b3892
+	0x7aff2a
+	0x7f8943
+	0x7f82ba
+	0x7ec706
+	0x7bda30
+	0x7bed54
+	0xbe57b4
+	0xbe098a
+	0x99c392
+	0x98c4c8
+	0x99324d
+	0x97c478
+	0x97c63c
+	0x9667ca
+	0x769a5d49
+	0x77a0d6db
+	0x77a0d661
+
+[2025-11-20 00:39:38.398699] Browser retry failed: Message: session not created: Chrome instance exited. Examine ChromeDriver verbose log to determine the cause.; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#sessionnotcreatedexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x974103
+	0x974144
+	0x77e71d
+	0x7b3892
+	0x7aff2a
+	0x7f8943
+	0x7f82ba
+	0x7ec706
+	0x7bda30
+	0x7bed54
+	0xbe57b4
+	0xbe098a
+	0x99c392
+	0x98c4c8
+	0x99324d
+	0x97c478
+	0x97c63c
+	0x9667ca
+	0x769a5d49
+	0x77a0d6db
+	0x77a0d661
+
+
+[2025-11-21 15:03:52.785224] Error in perform_google_reverse_search:
+Traceback (most recent call last):
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connection.py", line 565, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 706, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\Projects\MHacks25\Decluttered.ai\apps\api\main.py", line 652, in perform_google_reverse_search
+    self.driver.get("https://images.google.com")
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 483, in get
+    self.execute(Command.GET, {"url": url})
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 455, in execute
+    response = cast(RemoteConnection, self.command_executor).execute(driver_command, params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\remote_connection.py", line 407, in execute
+    return self._request(command_info[0], url, body=data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\selenium\webdriver\remote\remote_connection.py", line 431, in _request
+    response = self._conn.request(method, url, body=body, headers=headers, timeout=self._client_config.timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\_request_methods.py", line 143, in request
+    return self.request_encode_body(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\_request_methods.py", line 278, in request_encode_body
+    return self.urlopen(method, url, **extra_kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\poolmanager.py", line 459, in urlopen
+    response = conn.urlopen(method, u.request_uri, **kw)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\util\retry.py", line 474, in increment
+    raise reraise(type(error), error, _stacktrace)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\util\util.py", line 38, in reraise
+    raise value.with_traceback(tb)
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\site-packages\urllib3\connection.py", line 565, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\manta\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 706, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.ProtocolError: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))

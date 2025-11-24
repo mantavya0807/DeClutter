@@ -291,7 +291,7 @@ const CameraFeed = ({ onObjectsSelected, onBack }: CameraFeedProps) => {
   };
 
   // ----- New: send captured image to backend pipeline API -----
-  const PIPELINE_API_BASE = (process.env.NEXT_PUBLIC_PIPELINE_API_URL as string) || 'http://localhost:3005';
+  const PIPELINE_API_BASE = (process.env.NEXT_PUBLIC_PIPELINE_API_URL as string) || 'http://localhost:5000';
 
   const sendToPipeline = async (photoDataUrl: string) => {
     console.log('sendToPipeline called');

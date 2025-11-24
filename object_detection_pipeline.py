@@ -45,10 +45,11 @@ REPORT_FILENAME = "pipeline_analysis_report.txt"
 
 # API endpoints
 API_BASE_URL = "http://localhost"
-RECOGNITION_API_URL = f"{API_BASE_URL}:3001/api/recognition/basic"
-SCRAPER_API_URL = f"{API_BASE_URL}:3002/api/prices"
-FACEBOOK_LISTING_URL = f"{API_BASE_URL}:3003/api/facebook/listing"
-EBAY_LISTING_URL = f"{API_BASE_URL}:3004/api/ebay/listing"
+# Unified API runs on port 5000
+RECOGNITION_API_URL = f"{API_BASE_URL}:5000/api/recognition/basic"
+SCRAPER_API_URL = f"{API_BASE_URL}:5000/api/scraper/prices"
+FACEBOOK_LISTING_URL = f"{API_BASE_URL}:5000/api/listing/facebook"
+EBAY_LISTING_URL = f"{API_BASE_URL}:5000/api/listing/ebay"
 
 # Database configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL')
@@ -91,21 +92,46 @@ class ObjectDetectionPipeline:
                 print("⚠️ Database not available - skipping storage upload")
                 return None
             
-            with open(file_path, 'rb') as file:
-                response = self.supabase_client.storage.from_(bucket).upload(
-                    path=object_name,
-                    file=file,
-                    file_options={"content-type": "image/jpeg"}
-                )
-                
-                if response:
-                    # Get public URL
-                    public_url = self.supabase_client.storage.from_(bucket).get_public_url(object_name)
-                    print(f"✅ Uploaded to storage: {public_url}")
-                    return public_url
+            print(f"[DEBUG] Uploading {os.path.basename(file_path)} to bucket '{bucket}'...")
+            
+            # Check if bucket exists, if not try to create it or use fallback
+            try:
+                with open(file_path, 'rb') as file:
+                    response = self.supabase_client.storage.from_(bucket).upload(
+                        path=object_name,
+                        file=file,
+                        file_options={"content-type": "image/jpeg"}
+                    )
+            except Exception as e:
+                # If bucket not found, try to use 'images' bucket as fallback
+                if "Bucket not found" in str(e) or "404" in str(e):
+                    print(f"⚠️ Bucket '{bucket}' not found. Trying fallback 'images' bucket...")
+                    bucket = "images"
+                    with open(file_path, 'rb') as file:
+                        response = self.supabase_client.storage.from_(bucket).upload(
+                            path=object_name,
+                            file=file,
+                            file_options={"content-type": "image/jpeg"}
+                        )
+                else:
+                    raise e
+
+            print(f"[DEBUG] Upload response received")
+            
+            if response:
+                # Get public URL
+                print(f"[DEBUG] Getting public URL for {object_name}...")
+                public_url = self.supabase_client.storage.from_(bucket).get_public_url(object_name)
+                print(f"✅ Uploaded to storage: {public_url}")
+                return public_url
+            else:
+                print(f"[WARNING] Upload response was empty/falsy")
                     
         except Exception as e:
-            print(f"❌ Storage upload failed: {e}")
+            print(f"❌ Storage upload failed: {type(e).__name__}: {e}")
+            # Don't print traceback to avoid encoding errors in some consoles
+            # import traceback
+            # traceback.print_exc()
         
         return None
     
@@ -113,12 +139,12 @@ class ObjectDetectionPipeline:
         """Save photo metadata to database"""
         try:
             if not self.supabase_client:
-                return None
+                return str(uuid.uuid4()) # Return fake ID if no client
             
             file_stats = os.stat(image_path)
             photo_data = {
                 "filename": os.path.basename(image_path),
-                "url": storage_url or image_path,
+                "url": storage_url or "", # Ensure not None
                 "size": file_stats.st_size,
                 "user_id": "anonymous",
                 "processed": False
@@ -133,6 +159,8 @@ class ObjectDetectionPipeline:
                 
         except Exception as e:
             print(f"❌ Database photo save failed: {e}")
+            # Return a fake ID so the pipeline can continue even if DB save fails
+            return str(uuid.uuid4())
         
         return None
     
@@ -147,7 +175,7 @@ class ObjectDetectionPipeline:
                 "object_name": object_data["object_name"],
                 "confidence": float(object_data["confidence"]),
                 "bounding_box": object_data["bounding_box"],
-                "cropped_image_url": object_data.get("storage_url", object_data["cropped_path"]),
+                "cropped_image_url": object_data.get("storage_url", ""),
                 "estimated_value": object_data.get("estimated_value")
             }
             
@@ -160,6 +188,8 @@ class ObjectDetectionPipeline:
                 
         except Exception as e:
             print(f"❌ Database cropped object save failed: {e}")
+            # Return a fake ID so the pipeline can continue even if DB save fails
+            return str(uuid.uuid4())
         
         return None
     
@@ -173,19 +203,49 @@ class ObjectDetectionPipeline:
         
         try:
             # Upload original image to storage and save to database
+            print("[DEBUG] Starting storage upload...")
             timestamp = int(time.time())
             original_storage_name = f"original_{timestamp}_{os.path.basename(image_path)}"
             storage_url = self.upload_to_storage(image_path, "used_upload", original_storage_name)
+            print(f"[DEBUG] Storage upload complete, URL: {storage_url}")
+            
+            print("[DEBUG] Saving photo to database...")
             self.current_photo_id = self.save_photo_to_database(image_path, storage_url)
+            print(f"[DEBUG] Photo saved to database, ID: {self.current_photo_id}")
             
             # Run YOLO detection
-            results = self.yolo_model.predict(source=image_path, conf=0.25, save=False, verbose=False)
+            print(f"[DEBUG] Running YOLO detection on {image_path}...")
+            
+            # Verify image exists and is readable
+            if not os.path.exists(image_path):
+                print(f"❌ Image file does not exist: {image_path}")
+                return []
+                
+            try:
+                img_check = Image.open(image_path)
+                print(f"[DEBUG] Image opened successfully. Size: {img_check.size}, Mode: {img_check.mode}")
+            except Exception as e:
+                print(f"❌ Failed to open image with PIL: {e}")
+            
+            # Run inference with lower threshold for debugging
+            results = self.yolo_model.predict(source=image_path, conf=0.1, save=False, verbose=True)
+            print(f"[DEBUG] YOLO detection complete. Results object: {results}")
+            
+            if len(results) > 0:
+                print(f"[DEBUG] Raw boxes found: {len(results[0].boxes)}")
+                for box in results[0].boxes:
+                    print(f"[DEBUG] Box: cls={box.cls.item()}, conf={box.conf.item()}")
             
             all_detections = {}
             for result in results:
                 for box in result.boxes:
                     class_id = int(box.cls[0].item())
                     class_name = self.yolo_model.names[class_id]
+                    
+                    # Map 'clock' to 'watch' since YOLOv9 (COCO) doesn't have 'watch'
+                    if class_name == 'clock':
+                        class_name = 'watch'
+                        
                     coords = tuple(int(c) for c in box.xyxy[0].tolist())
                     confidence = float(box.conf[0].item())
                     
@@ -195,8 +255,18 @@ class ObjectDetectionPipeline:
                     }
             
             if not all_detections:
-                print("⚠️ No objects detected")
-                return []
+                print("⚠️ No objects detected by YOLO")
+                # Fallback: If no objects detected, treat the whole image as one object
+                print("🔄 FALLBACK: Treating entire image as one object")
+                
+                img = Image.open(image_path)
+                w, h = img.size
+                
+                # Create a fake detection for the whole image
+                all_detections[(0, 0, w, h)] = {
+                    "class_name": "item",
+                    "confidence": 1.0
+                }
             
             # Filter for largest instances of each object type
             filtered_detections = self.select_largest_instances(all_detections)
@@ -218,6 +288,7 @@ class ObjectDetectionPipeline:
             crop_index = 0
             
             for coords, detection in filtered_detections.items():
+                # Case-insensitive check
                 if detection["class_name"].lower() in [obj.lower() for obj in resellable_objects]:
                     crop_index += 1
                     
@@ -227,9 +298,30 @@ class ObjectDetectionPipeline:
                     )
                     
                     if cropped_path:
+                        # Ensure absolute path
+                        cropped_path = os.path.abspath(cropped_path)
                         # Upload cropped image to storage
-                        cropped_storage_name = f"cropped_{timestamp}_{crop_index}_{detection['class_name']}.jpg"
-                        cropped_storage_url = self.upload_to_storage(cropped_path, "cropped", cropped_storage_name)
+                        cropped_storage_name = f"cropped_{timestamp}_{crop_index}_{detection['class_name']}.png"
+                        
+                        # Determine content type based on extension
+                        content_type = "image/png" if cropped_path.lower().endswith(".png") else "image/jpeg"
+                        
+                        # Upload with correct content type
+                        try:
+                            with open(cropped_path, 'rb') as file:
+                                response = self.supabase_client.storage.from_("cropped").upload(
+                                    path=cropped_storage_name,
+                                    file=file,
+                                    file_options={"content-type": content_type}
+                                )
+                            
+                            if response:
+                                cropped_storage_url = self.supabase_client.storage.from_("cropped").get_public_url(cropped_storage_name)
+                            else:
+                                cropped_storage_url = ""
+                        except Exception as e:
+                            print(f"⚠️ Storage upload failed: {e}")
+                            cropped_storage_url = ""
                         
                         # Prepare object data
                         object_data = {
@@ -242,7 +334,8 @@ class ObjectDetectionPipeline:
                                 "height": coords[3] - coords[1]
                             },
                             "cropped_path": cropped_path,
-                            "storage_url": cropped_storage_url,
+                            # Use local path as fallback if storage upload fails
+                            "storage_url": cropped_storage_url or "", 
                             "coordinates": coords
                         }
                         
@@ -328,13 +421,29 @@ class ObjectDetectionPipeline:
             # Create cropped directory if it doesn't exist
             os.makedirs("cropped_resellables", exist_ok=True)
             
-            # Save cropped image
+            # Save cropped image as PNG to preserve quality and avoid JPEG artifacts/mode issues
             safe_object_name = object_name.replace(" ", "_").replace("/", "_")
-            crop_filename = f"{timestamp}_{index}_{safe_object_name}.jpg"
+            crop_filename = f"{timestamp}_{index}_{safe_object_name}.png"
             crop_path = os.path.join("cropped_resellables", crop_filename)
             
-            cropped_img.save(crop_path, "JPEG", quality=90)
-            print(f"📸 Cropped and saved: {crop_filename}")
+            # Save as PNG (supports RGBA, so no need for complex conversion)
+            cropped_img.save(crop_path, "PNG")
+            
+            # Verify the file was saved correctly
+            if os.path.exists(crop_path) and os.path.getsize(crop_path) > 0:
+                print(f"📸 Cropped and saved: {crop_filename} ({os.path.getsize(crop_path)} bytes)")
+                
+                # Double check if we can open it back
+                try:
+                    with Image.open(crop_path) as check_img:
+                        check_img.verify()
+                    print(f"✅ Verified image integrity: {crop_filename}")
+                except Exception as e:
+                    print(f"❌ Saved image is corrupt: {e}")
+                    return None
+            else:
+                print(f"❌ Failed to save image: {crop_filename}")
+                return None
             
             return crop_path
             
@@ -358,8 +467,11 @@ class ObjectDetectionPipeline:
                 base64_image = base64.b64encode(image_data).decode('utf-8')
                 print(f"📷 Image encoded, size: {len(image_data)} bytes")
             
+            # Determine mime type
+            mime_type = "image/png" if image_path.lower().endswith(".png") else "image/jpeg"
+            
             payload = {
-                "image_base64": f"data:image/jpeg;base64,{base64_image}"
+                "image_base64": f"data:{mime_type};base64,{base64_image}"
             }
             
             print(f"🌐 Sending POST request to {RECOGNITION_API_URL}")
@@ -396,7 +508,7 @@ class ObjectDetectionPipeline:
             print(f"💰 Getting market prices for: {product_name}")
             
             payload = {
-                "name": product_name,
+                "product_name": product_name,
                 "platforms": ["facebook", "ebay"],
                 "condition_filter": "all"
             }
@@ -448,29 +560,64 @@ class ObjectDetectionPipeline:
         except Exception:
             return 50.0
     
-    def call_listing_apis(self, product_data: Dict, pricing_data: Dict, platforms: List[str]) -> Dict:
+    def call_listing_apis(self, product_data: Dict, pricing_data: Dict, platforms: List[str], image_path: str = None) -> Dict:
         """Call listing APIs for marketplace posting"""
         results = {}
         
         try:
+            # Normalize platforms to lowercase
+            platforms = [p.lower() for p in platforms]
+            print(f"[DEBUG] Normalized platforms: {platforms}")
+
+            # Ensure product_data has the right structure
+            # If it comes from recognition_result, it might be nested
+            if "product_name" in product_data:
+                name = product_data["product_name"]
+            elif "object_name" in product_data:
+                name = product_data["object_name"]
+            else:
+                name = product_data.get("name", "Unknown Item")
+            
+            # Prepare image data if path provided
+            images = []
+            if image_path and os.path.exists(image_path):
+                try:
+                    with open(image_path, "rb") as img_file:
+                        b64_data = base64.b64encode(img_file.read()).decode('utf-8')
+                        images.append(b64_data)
+                    print(f"[DEBUG] Encoded image for listing: {image_path}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to encode image for listing: {e}")
+
+            # Construct clean payload for listing API
             listing_payload = {
-                "product": product_data,
-                "pricing_data": pricing_data
+                "product": {
+                    "name": name,
+                    "condition": "used",
+                    "category": "Electronics", # Default, will be refined by listing API
+                    "price": product_data.get("price") # Pass explicit price if available
+                },
+                "pricing_data": pricing_data,
+                "platforms": platforms,
+                "images": images
             }
             
+            print(f"[DEBUG] Calling Listing API with payload: {json.dumps({k:v for k,v in listing_payload.items() if k != 'images'}, indent=2)}")
+            
             # Facebook Marketplace listing
-            if "facebook" in platforms:
+            if "facebook" in platforms or "facebook marketplace" in platforms:
                 try:
                     print("📘 Creating Facebook Marketplace listing...")
-                    response = requests.post(FACEBOOK_LISTING_URL, json=listing_payload, timeout=120)
+                    # Call the specific Facebook endpoint directly for better control
+                    response = requests.post(FACEBOOK_LISTING_URL, json=listing_payload, timeout=300)
                     
                     if response.status_code == 200:
                         result = response.json()
                         results["facebook"] = result
-                        print("✅ Facebook listing API called successfully")
+                        print(f"✅ Facebook listing API success: {result}")
                     else:
-                        results["facebook"] = {"error": f"API returned {response.status_code}"}
-                        print(f"❌ Facebook listing API failed: {response.status_code}")
+                        results["facebook"] = {"error": f"API returned {response.status_code}", "details": response.text}
+                        print(f"❌ Facebook listing API failed: {response.status_code} - {response.text}")
                         
                 except Exception as e:
                     results["facebook"] = {"error": str(e)}
@@ -501,12 +648,24 @@ class ObjectDetectionPipeline:
             return {"error": str(e)}
     
     def save_listing_to_database(self, cropped_id: str, listing_data: Dict, 
-                               listing_results: Dict) -> Optional[str]:
+                               listing_results: Dict, user_id: str = "anonymous") -> Optional[str]:
         """Save listing information to database"""
         try:
             if not self.supabase_client or not cropped_id:
                 return None
             
+            # Try to get photo_id if current_photo_id is missing
+            photo_id = self.current_photo_id
+            if not photo_id:
+                try:
+                    # Fetch photo_id from cropped table
+                    cropped_data = self.supabase_client.table("cropped").select("photo_id").eq("id", cropped_id).execute()
+                    if cropped_data.data and len(cropped_data.data) > 0:
+                        photo_id = cropped_data.data[0]["photo_id"]
+                        print(f"[DEBUG] Recovered photo_id {photo_id} from cropped_id {cropped_id}")
+                except Exception as e:
+                    print(f"[WARNING] Could not recover photo_id: {e}")
+
             platforms = []
             facebook_post_id = None
             ebay_listing_id = None
@@ -528,7 +687,7 @@ class ObjectDetectionPipeline:
                     # Extract eBay listing ID if available
             
             listing_db_data = {
-                "photo_id": self.current_photo_id,
+                "photo_id": photo_id,
                 "cropped_id": cropped_id,
                 "title": listing_data["title"],
                 "description": listing_data["description"],
@@ -537,7 +696,7 @@ class ObjectDetectionPipeline:
                 "status": status,
                 "facebook_post_id": facebook_post_id,
                 "ebay_listing_id": ebay_listing_id,
-                "user_id": "anonymous"
+                "user_id": user_id
             }
             
             if status == "posted":
@@ -639,7 +798,15 @@ class ObjectDetectionPipeline:
                     "category": "Electronics"
                 }
                 
-                listing_results = self.call_listing_apis(product_data, pricing_result, platforms)
+                print(f"🚀 Triggering listing APIs for {product_name}...")
+                listing_results = self.call_listing_apis(
+                    product_data, 
+                    pricing_result, 
+                    platforms,
+                    image_path=obj_data.get("cropped_path")
+                )
+                print(f"🏁 Listing API results: {listing_results}")
+                
                 obj_result["listing_result"] = listing_results
                 
                 # Save listing to database
